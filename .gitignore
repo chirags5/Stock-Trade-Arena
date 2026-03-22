@@ -1,0 +1,11 @@
+myenv/
+venv/
+env/
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+backend/arena.db
+frontend/node_modules/
+frontend/build/
+.DS_Store
+*.log
