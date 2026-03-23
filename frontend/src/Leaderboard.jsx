@@ -7,7 +7,6 @@ export default function Leaderboard({ API }) {
 
   useEffect(() => {
     fetchLeaderboard();
-    // Refresh every 30 seconds
     const interval = setInterval(fetchLeaderboard, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -24,25 +23,27 @@ export default function Leaderboard({ API }) {
   }
 
   if (loading) {
-    return <div style={styles.center}>Loading leaderboard...</div>;
+    return (
+      <div style={styles.loadingWrap}>
+        <div style={styles.loadingSpinner} />
+        <div style={styles.loadingText}>Fetching leaderboard...</div>
+      </div>
+    );
   }
 
   return (
-    <div>
-      <div style={styles.card}>
-        <div style={styles.cardHeader}>
+    <div style={styles.wrapper}>
+      <div style={styles.glassPanel}>
+        <div style={styles.panelHeader}>
           <div>
-            <div style={styles.cardTitle}>Leaderboard</div>
-            <div style={styles.cardSub}>
-              Ranked by portfolio value · Starting capital ₹10,00,000
-            </div>
+            <h2 style={styles.panelTitle}>Leaderboard</h2>
+            <div style={styles.panelSub}>Ranked by portfolio value · Starting capital ₹10,00,000</div>
           </div>
           <button style={styles.refreshBtn} onClick={fetchLeaderboard}>
             Refresh
           </button>
         </div>
 
-        {/* Table Header */}
         <div style={styles.tableHeader}>
           <div style={styles.rankCol}>Rank</div>
           <div style={styles.nameCol}>Trader</div>
@@ -51,221 +52,202 @@ export default function Leaderboard({ API }) {
           <div style={styles.pctCol}>Return</div>
         </div>
 
-        {/* Rows */}
-        {leaderboard.map((user, index) => {
-          const pnl     = user.portfolio_val - 1000000;
-          const pct     = ((pnl / 1000000) * 100).toFixed(2);
-          const isReal  = user.is_real === 1;
-          const isTop3  = index < 3;
+        <div style={styles.listContainer}>
+          {leaderboard.map((user, index) => {
+            const pnl    = user.portfolio_val - 1000000;
+            const pct    = ((pnl / 1000000) * 100).toFixed(2);
+            const isReal = user.is_real === 1;
+            const isTop3 = index < 3;
 
-          const rankColors = ['#f59e0b', '#9ca3af', '#cd7c3f'];
-          const rankColor  = isTop3 ? rankColors[index] : '#d1d5db';
+            const rankColors = ['#ffd700', '#c0c0c0', '#cd7f32']; // Hardcoded medals
+            const rankColor  = isTop3 ? rankColors[index] : 'var(--glass-border)';
 
-          return (
-            <div
-              key={user.username}
-              style={{
-                ...styles.row,
-                backgroundColor: isReal ? '#eff6ff' : '#ffffff',
-                border: isReal ? '1px solid #bfdbfe' : '1px solid #f3f4f6',
-              }}
-            >
-              {/* Rank */}
-              <div style={styles.rankCol}>
-                <div style={{
-                  ...styles.rankBadge,
-                  backgroundColor: isTop3 ? rankColor : '#f3f4f6',
-                  color:           isTop3 ? '#ffffff'  : '#6b7280',
-                }}>
-                  {index + 1}
+            return (
+              <div
+                key={user.username}
+                style={{
+                  ...styles.row,
+                  backgroundColor: isReal ? 'var(--tab-shadow)' : 'transparent',
+                  border: isReal ? '1px solid var(--tab-active)' : '1px solid transparent',
+                  borderBottom: isReal ? '1px solid var(--tab-active)' : '1px solid var(--glass-border)',
+                  boxShadow: isReal ? '0 0 20px var(--tab-shadow) inset' : 'none'
+                }}
+              >
+                {/* Rank */}
+                <div style={styles.rankCol}>
+                  <div style={{
+                    ...styles.rankBadge,
+                    backgroundColor: isTop3 ? rankColor : 'var(--table-header-bg)',
+                    color:           isTop3 ? '#000000' : 'var(--text-secondary)',
+                    boxShadow:       isTop3 ? `0 0 10px ${rankColor}` : 'none'
+                  }}>
+                    {index + 1}
+                  </div>
                 </div>
-              </div>
 
-              {/* Name */}
-              <div style={styles.nameCol}>
-                <div style={styles.username}>
-                  {user.username}
-                  {isReal && (
-                    <span style={styles.youBadge}>YOU</span>
+                {/* Name */}
+                <div style={styles.nameCol}>
+                  <div style={styles.username}>
+                    {user.username}
+                    {isReal && (
+                      <span style={styles.youBadge}>YOU</span>
+                    )}
+                  </div>
+                  {isTop3 && (
+                    <div style={styles.topLabel}>
+                      {index === 0 ? '🏆 Top Trader' : index === 1 ? '🥈 Runner Up' : '🥉 3rd Place'}
+                    </div>
                   )}
                 </div>
-                {isTop3 && (
-                  <div style={styles.topLabel}>
-                    {index === 0 ? 'Top Trader' : index === 1 ? 'Runner Up' : '3rd Place'}
+
+                {/* Portfolio Value */}
+                <div style={styles.valCol}>
+                  <div style={styles.valText}>
+                    ₹{user.portfolio_val.toLocaleString('en-IN')}
                   </div>
-                )}
-              </div>
+                </div>
 
-              {/* Portfolio Value */}
-              <div style={styles.valCol}>
-                <div style={styles.valText}>
-                  ₹{user.portfolio_val.toLocaleString('en-IN')}
+                {/* P&L */}
+                <div style={styles.pnlCol}>
+                  <div style={{
+                    ...styles.pnlText,
+                    color: pnl >= 0 ? 'var(--green-text)' : 'var(--red-text)',
+                  }}>
+                    {pnl >= 0 ? '+' : '-'}₹{Math.abs(pnl).toLocaleString('en-IN')}
+                  </div>
+                </div>
+
+                {/* Return % */}
+                <div style={styles.pctCol}>
+                  <div style={{
+                    ...styles.pctBadge,
+                    backgroundColor: pnl >= 0 ? 'var(--green-bg)' : 'var(--red-bg)',
+                    border:          pnl >= 0 ? '1px solid var(--green-border)' : '1px solid var(--red-border)',
+                    color:           pnl >= 0 ? 'var(--green-text)' : 'var(--red-text)',
+                  }}>
+                    {pct >= 0 ? '+' : ''}{pct}%
+                  </div>
                 </div>
               </div>
-
-              {/* P&L */}
-              <div style={styles.pnlCol}>
-                <div style={{
-                  ...styles.pnlText,
-                  color: pnl >= 0 ? '#16a34a' : '#dc2626',
-                }}>
-                  {pnl >= 0 ? '+' : '-'}₹{Math.abs(pnl).toLocaleString('en-IN')}
-                </div>
-              </div>
-
-              {/* Return % */}
-              <div style={styles.pctCol}>
-                <div style={{
-                  ...styles.pctBadge,
-                  backgroundColor: pnl >= 0 ? '#f0fdf4' : '#fef2f2',
-                  color:           pnl >= 0 ? '#16a34a' : '#dc2626',
-                }}>
-                  {pct >= 0 ? '+' : ''}{pct}%
-                </div>
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       <div style={styles.note}>
-        Your row updates live as your portfolio value changes.
-        Other traders update periodically.
+        Your row updates live as your portfolio value changes. Other traders update periodically.
       </div>
     </div>
   );
 }
 
 const styles = {
-  center: {
-    textAlign: 'center',
-    padding: '40px',
-    color: '#6b7280',
-  },
-  card: {
-    backgroundColor: '#ffffff',
-    border: '1px solid #e5e7eb',
+  wrapper: { width: '100%' },
+  loadingWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '80px 20px', gap: '16px' },
+  loadingSpinner: { width: '32px', height: '32px', border: '3px solid var(--glass-border)', borderTop: '3px solid var(--tab-active)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
+  loadingText: { fontSize: '14px', color: 'var(--text-secondary)' },
+  
+  glassPanel: {
+    backgroundColor: 'var(--glass-bg)',
+    backdropFilter: 'blur(24px)',
+    WebkitBackdropFilter: 'blur(24px)',
+    border: '1px solid var(--glass-border)',
     borderRadius: '12px',
-    padding: '18px 20px',
-    marginBottom: '12px',
+    boxShadow: 'var(--glass-shadow)',
+    overflow: 'hidden',
+    marginBottom: '16px',
+    transition: 'all 0.3s ease',
   },
-  cardHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: '18px',
+  panelHeader: { 
+    display: 'flex', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    padding: '24px', 
+    borderBottom: '1px solid var(--glass-border)',
+    backgroundColor: 'var(--table-header-bg)'
   },
-  cardTitle: {
-    fontSize: '16px',
-    fontWeight: '700',
-    color: '#1a1a1a',
-    marginBottom: '3px',
-  },
-  cardSub: {
-    fontSize: '12px',
-    color: '#6b7280',
-  },
-  refreshBtn: {
-    padding: '6px 14px',
-    border: '1px solid #d1d5db',
-    borderRadius: '6px',
-    background: '#ffffff',
-    fontSize: '12px',
-    color: '#374151',
+  panelTitle: { fontSize: '20px', fontWeight: '600', color: 'var(--text-primary)', margin: '0 0 6px 0' },
+  panelSub: { fontSize: '13px', color: 'var(--text-secondary)' },
+  
+  refreshBtn: { 
+    padding: '8px 16px', 
+    border: '1px solid var(--glass-border)', 
+    borderRadius: '6px', 
+    background: 'var(--table-header-bg)', 
+    fontSize: '13px', 
+    color: 'var(--text-primary)', 
     cursor: 'pointer',
+    transition: 'all 0.2s',
   },
+  
   tableHeader: {
     display: 'flex',
     alignItems: 'center',
-    padding: '8px 12px',
-    marginBottom: '6px',
-    fontSize: '11px',
-    fontWeight: '600',
-    color: '#9ca3af',
+    padding: '16px 24px',
+    backgroundColor: 'var(--table-header-bg)',
+    borderBottom: '1px solid var(--glass-border)',
+    fontSize: '12px',
+    fontWeight: '500',
+    color: 'var(--text-secondary)',
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
   },
+  
+  listContainer: { padding: '10px 24px 24px 24px' },
   row: {
     display: 'flex',
     alignItems: 'center',
-    padding: '12px',
-    borderRadius: '8px',
-    marginBottom: '6px',
+    padding: '16px',
+    borderRadius: '10px',
+    marginBottom: '8px',
     transition: 'all 0.2s',
   },
-  rankCol: {
-    width: '60px',
-    flexShrink: 0,
-  },
-  nameCol: {
-    flex: 1,
-  },
-  valCol: {
-    width: '160px',
-    textAlign: 'right',
-    flexShrink: 0,
-  },
-  pnlCol: {
-    width: '140px',
-    textAlign: 'right',
-    flexShrink: 0,
-  },
-  pctCol: {
-    width: '90px',
-    textAlign: 'right',
-    flexShrink: 0,
-  },
+  
+  rankCol: { width: '70px', flexShrink: 0 },
+  nameCol: { flex: 1 },
+  valCol: { width: '160px', textAlign: 'right', flexShrink: 0 },
+  pnlCol: { width: '140px', textAlign: 'right', flexShrink: 0 },
+  pctCol: { width: '100px', textAlign: 'right', flexShrink: 0 },
+  
   rankBadge: {
-    width: '30px',
-    height: '30px',
+    width: '34px',
+    height: '34px',
     borderRadius: '50%',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: '13px',
+    fontSize: '14px',
     fontWeight: '700',
   },
   username: {
-    fontSize: '14px',
+    fontSize: '15px',
     fontWeight: '600',
-    color: '#1a1a1a',
+    color: 'var(--text-primary)',
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
+    gap: '10px',
   },
   youBadge: {
     fontSize: '10px',
     fontWeight: '700',
-    padding: '1px 7px',
+    padding: '2px 8px',
     borderRadius: '99px',
-    backgroundColor: '#2563eb',
-    color: '#ffffff',
+    backgroundColor: 'var(--tab-shadow)',
+    border: '1px solid var(--tab-active)',
+    color: 'var(--tab-active)',
   },
-  topLabel: {
-    fontSize: '11px',
-    color: '#9ca3af',
-    marginTop: '2px',
-  },
-  valText: {
-    fontSize: '14px',
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  pnlText: {
-    fontSize: '14px',
-    fontWeight: '600',
-  },
+  topLabel: { fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' },
+  
+  valText: { fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)' },
+  pnlText: { fontSize: '15px', fontWeight: '600' },
   pctBadge: {
     display: 'inline-block',
-    fontSize: '12px',
+    fontSize: '13px',
     fontWeight: '600',
-    padding: '3px 8px',
+    padding: '4px 10px',
     borderRadius: '6px',
+    backdropFilter: 'blur(4px)',
   },
-  note: {
-    fontSize: '12px',
-    color: '#9ca3af',
-    textAlign: 'center',
-    padding: '8px',
-  },
+  
+  note: { fontSize: '13px', color: 'var(--text-secondary)', textAlign: 'center', padding: '10px' },
 };

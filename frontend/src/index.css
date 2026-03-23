@@ -4,16 +4,84 @@
   padding: 0;
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background-color: #f5f5f5;
-  color: #1a1a1a;
+:root {
+  /* ☀️ LIGHT MODE VARIABLES */
+  --bg-gradient: radial-gradient(circle at 50% -20%, #f8fafc 0%, #e2e8f0 40%, #cbd5e1 100%);
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  
+  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-solid: rgba(255, 255, 255, 0.95);
+  --glass-border: rgba(0, 0, 0, 0.05);
+  --glass-header: rgba(255, 255, 255, 0.5);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+  
+  --tab-active: #4f46e5;
+  --tab-shadow: rgba(79, 70, 229, 0.15);
+  
+  --green-bg: rgba(76, 175, 80, 0.15);
+  --green-border: rgba(76, 175, 80, 0.3);
+  --green-text: #2e7d32;
+  
+  --red-bg: rgba(239, 83, 80, 0.15);
+  --red-border: rgba(239, 83, 80, 0.3);
+  --red-text: #c62828;
+  
+  --gold-bg: rgba(212, 175, 55, 0.15);
+  --gold-border: rgba(212, 175, 55, 0.4);
+
+  --input-bg: rgba(255, 255, 255, 0.8);
+  --table-header-bg: rgba(0, 0, 0, 0.05);
+  --row-hover: rgba(0, 0, 0, 0.02);
 }
 
-button {
-  cursor: pointer;
+[data-theme='dark'] {
+  /* 🌙 DARK MODE VARIABLES */
+  --bg-gradient: radial-gradient(circle at 50% -20%, #2b2e4a 0%, #161822 40%, #0f111a 100%);
+  --text-primary: #ffffff;
+  --text-secondary: #8a91a5;
+  
+  --glass-bg: rgba(30, 34, 45, 0.3);
+  --glass-solid: rgba(30, 35, 48, 0.95);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-header: rgba(20, 24, 34, 0.4);
+  --glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  
+  --tab-active: #b4a0ff;
+  --tab-shadow: rgba(180, 160, 255, 0.15);
+  
+  --green-bg: rgba(76, 175, 80, 0.15);
+  --green-border: rgba(76, 175, 80, 0.3);
+  --green-text: #4caf50;
+  
+  --red-bg: rgba(239, 83, 80, 0.15);
+  --red-border: rgba(239, 83, 80, 0.3);
+  --red-text: #ef5350;
+  
+  --gold-bg: rgba(212, 175, 55, 0.05);
+  --gold-border: rgba(212, 175, 55, 0.3);
+
+  --input-bg: rgba(56, 62, 80, 0.4);
+  --table-header-bg: rgba(0, 0, 0, 0.1);
+  --row-hover: rgba(255, 255, 255, 0.03);
 }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  background: var(--bg-gradient);
+  color: var(--text-primary);
+  min-height: 100vh;
+  transition: background 0.4s ease, color 0.4s ease;
+}
+
+button { cursor: pointer; font-family: inherit; }
+
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--table-header-bg); }
+::-webkit-scrollbar-thumb { background: var(--text-secondary); border-radius: 4px; opacity: 0.5; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-primary); }
