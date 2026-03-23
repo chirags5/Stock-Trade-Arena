@@ -7,10 +7,10 @@ import axios from 'axios';
 
 const API = 'http://localhost:8000';
 
-const TABS = ['Signals', 'Portfolio', 'Audit Trail', 'Leaderboard'];
+const TABS = ['Trade', 'Portfolio', 'Audit Trail', 'Leaderboard'];
 
 export default function App() {
-  const [activeTab, setActiveTab]   = useState('Signals');
+  const [activeTab, setActiveTab]   = useState('Trade');
   const [prices, setPrices]         = useState({});
   const [portfolio, setPortfolio]   = useState(null);
 
@@ -90,16 +90,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Ticker Bar */}
-      <div style={styles.tickerBar}>
-        {Object.entries(prices).map(([ticker, price]) => (
-          <span key={ticker} style={styles.tickerItem}>
-            <span style={styles.tickerName}>{ticker}</span>
-            <span style={styles.tickerPrice}>₹{price}</span>
-          </span>
-        ))}
-      </div>
-
       {/* Tabs */}
       <div style={styles.tabs}>
         {TABS.map(tab => (
@@ -118,7 +108,7 @@ export default function App() {
 
       {/* Tab Content */}
       <div style={styles.content}>
-        {activeTab === 'Signals'     && <SignalFeed API={API} prices={prices} onTrade={fetchPortfolio} />}
+        {activeTab === 'Trade'       && <SignalFeed API={API} prices={prices} onTrade={fetchPortfolio} />}
         {activeTab === 'Portfolio'   && <Portfolio  API={API} prices={prices} portfolio={portfolio} onExit={fetchPortfolio} />}
         {activeTab === 'Audit Trail' && <AuditLog   API={API} />}
         {activeTab === 'Leaderboard' && <Leaderboard API={API} />}
@@ -171,30 +161,6 @@ const styles = {
     fontSize: '16px',
     fontWeight: '600',
     color: '#1a1a1a',
-  },
-  tickerBar: {
-    backgroundColor: '#1a1a1a',
-    padding: '8px 24px',
-    display: 'flex',
-    gap: '24px',
-    overflowX: 'auto',
-    flexWrap: 'wrap',
-  },
-  tickerItem: {
-    display: 'flex',
-    gap: '8px',
-    alignItems: 'center',
-    whiteSpace: 'nowrap',
-  },
-  tickerName: {
-    fontSize: '12px',
-    color: '#9ca3af',
-    fontWeight: '500',
-  },
-  tickerPrice: {
-    fontSize: '12px',
-    color: '#ffffff',
-    fontWeight: '600',
   },
   tabs: {
     backgroundColor: '#ffffff',

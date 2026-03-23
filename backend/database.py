@@ -53,10 +53,11 @@ def init_db():
         )
     """)
 
+    # signal_id is now nullable — trades can exist without a signal
     c.execute("""
         CREATE TABLE IF NOT EXISTS trades (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            signal_id  INTEGER NOT NULL,
+            signal_id  INTEGER DEFAULT NULL,
             ticker     TEXT NOT NULL,
             direction  TEXT NOT NULL,
             qty        INTEGER NOT NULL,
@@ -88,7 +89,7 @@ def init_db():
         )
     """)
 
-    # seed demo user portfolio
+    # Seed demo user portfolio
     exists = c.execute(
         "SELECT id FROM portfolio WHERE user_id = 'demo_user'"
     ).fetchone()
@@ -99,7 +100,7 @@ def init_db():
         )
         print("Demo user created — ₹10,00,000 virtual cash ready")
 
-    # seed fake leaderboard users
+    # Seed fake leaderboard users
     fake_users = [
         ("TradingPro_99",  1124500, 0),
         ("Mumbai_Bulls",   1087200, 0),
@@ -238,6 +239,8 @@ def get_all_signals():
 
 
 def update_signal_outcome(signal_id, outcome):
+    if signal_id is None:
+        return
     conn = get_connection()
     conn.execute(
         "UPDATE signals SET outcome=? WHERE id=?", (outcome, signal_id)
@@ -248,7 +251,7 @@ def update_signal_outcome(signal_id, outcome):
 
 # ── Trade helpers ─────────────────────────────────────────────────────────────
 
-def save_trade(signal_id, ticker, direction, qty, buy_price):
+def save_trade(ticker, direction, qty, buy_price, signal_id=None):
     conn = get_connection()
     cursor = conn.execute("""
         INSERT INTO trades
@@ -288,10 +291,11 @@ def close_trade(trade_id, sell_price):
 
 def get_open_trades():
     conn = get_connection()
+    # LEFT JOIN — works even when signal_id is NULL
     rows = conn.execute("""
         SELECT t.*, s.explanation, s.pattern, s.conviction
         FROM trades t
-        JOIN signals s ON t.signal_id = s.id
+        LEFT JOIN signals s ON t.signal_id = s.id
         WHERE t.status = 'OPEN'
     """).fetchall()
     conn.close()
@@ -303,7 +307,7 @@ def get_all_trades():
     rows = conn.execute("""
         SELECT t.*, s.explanation, s.pattern, s.conviction
         FROM trades t
-        JOIN signals s ON t.signal_id = s.id
+        LEFT JOIN signals s ON t.signal_id = s.id
         ORDER BY t.buy_time DESC
     """).fetchall()
     conn.close()

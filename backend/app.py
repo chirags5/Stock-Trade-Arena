@@ -1,35 +1,25 @@
 import threading
 import time
-from datetime import datetime
+import requests
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from database import (
     init_db, get_cash_balance, update_cash_balance,
-    save_signal, get_all_signals, update_signal_outcome,
     save_trade, close_trade, get_open_trades, get_all_trades,
     get_all_live_prices, get_live_price,
     get_leaderboard, update_leaderboard_realuser
 )
-from data_fetcher import fetch_live_prices
-from patterns import detect_patterns_for_all_stocks
-from ai_layer import process_signals
-
-app = FastAPI(title="Paper Trade Arena API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+from data_fetcher import (
+    fetch_live_prices, fetch_price_for_ticker, load_nse_stocks
 )
 
 
-# ── Request body models ───────────────────────────────────────────────────────
+# ── Request models ────────────────────────────────────────────────────────────
 
 class TradeRequest(BaseModel):
-    signal_id: int
     ticker:    str
     direction: str
     qty:       int
@@ -41,43 +31,168 @@ class ExitRequest(BaseModel):
     sell_price: float
 
 
-# ── Demo signals fallback ─────────────────────────────────────────────────────
+# ── Nifty 500 — fetched live from NSE, refreshed every 24 hours ───────────────
 
-def get_demo_signals():
-    """
-    Fallback demo signals when no real patterns detected today.
-    Uses real current prices from the database.
-    """
-    demo = [
-        {
-            "ticker":     "RELIANCE",
-            "stock_name": "Reliance Industries",
-            "pattern":    "Bullish Flag Breakout",
-            "direction":  "BUY",
-            "price":      get_live_price("RELIANCE") or 1414.0,
-            "details":    {"volume_ratio": 2.1},
-        },
-        {
-            "ticker":     "HDFCBANK",
-            "stock_name": "HDFC Bank",
-            "pattern":    "Support Bounce",
-            "direction":  "BUY",
-            "price":      get_live_price("HDFCBANK") or 780.0,
-            "details":    {"volume_ratio": 1.6},
-        },
-        {
-            "ticker":     "INFY",
-            "stock_name": "Infosys",
-            "pattern":    "Bearish Breakdown",
-            "direction":  "SHORT",
-            "price":      get_live_price("INFY") or 1255.0,
-            "details":    {"volume_ratio": 1.8},
-        },
+_NIFTY500_CACHE      = []
+_NIFTY500_LAST_FETCH = 0
+
+
+def fetch_nifty500_tickers() -> list:
+    global _NIFTY500_CACHE, _NIFTY500_LAST_FETCH
+
+    if _NIFTY500_CACHE and (time.time() - _NIFTY500_LAST_FETCH) < 86400:
+        return _NIFTY500_CACHE
+
+    print("Fetching Nifty 500 constituents from NSE...", end=" ", flush=True)
+    try:
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/120.0.0.0 Safari/537.36",
+            "Accept":          "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer":         "https://www.nseindia.com/",
+        })
+        session.get("https://www.nseindia.com", timeout=10)
+        res = session.get(
+            "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%20500",
+            timeout=15
+        )
+        res.raise_for_status()
+        data = res.json()
+
+        tickers = []
+        for item in data.get("data", []):
+            symbol = item.get("symbol", "").strip()
+            if symbol and symbol != "NIFTY 500":
+                tickers.append(symbol)
+
+        if len(tickers) >= 400:
+            _NIFTY500_CACHE      = tickers
+            _NIFTY500_LAST_FETCH = time.time()
+            print(f"{len(tickers)} constituents loaded ✓")
+            return _NIFTY500_CACHE
+        else:
+            raise ValueError(f"Only got {len(tickers)} tickers")
+
+    except Exception as e:
+        print(f"NSE API failed: {e}")
+
+    # ── Fallback: NSE CSV ─────────────────────────────────────────────────────
+    print("Trying NSE CSV for Nifty 500...", end=" ", flush=True)
+    try:
+        import pandas as pd
+        from io import StringIO
+
+        session2 = requests.Session()
+        session2.headers.update({
+            "User-Agent": "Mozilla/5.0",
+            "Referer":    "https://www.nseindia.com/",
+        })
+        session2.get("https://www.nseindia.com", timeout=10)
+        csv_res = session2.get(
+            "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
+            timeout=15
+        )
+        csv_res.raise_for_status()
+        df  = pd.read_csv(StringIO(csv_res.text))
+        col = next((c for c in df.columns if "symbol" in c.lower()), None)
+        if col:
+            tickers = df[col].str.strip().tolist()
+            _NIFTY500_CACHE      = tickers
+            _NIFTY500_LAST_FETCH = time.time()
+            print(f"{len(tickers)} from CSV ✓")
+            return _NIFTY500_CACHE
+    except Exception as e:
+        print(f"CSV fallback failed: {e}")
+
+    # ── Stale cache ───────────────────────────────────────────────────────────
+    if _NIFTY500_CACHE:
+        print("Using stale Nifty 500 cache.")
+        return _NIFTY500_CACHE
+
+    # ── Absolute fallback: Nifty 50 ───────────────────────────────────────────
+    print("Using hardcoded Nifty 50 as fallback.")
+    return [
+        "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
+        "HINDUNILVR", "SBIN", "BAJFINANCE", "KOTAKBANK", "BHARTIARTL",
+        "ITC", "AXISBANK", "LT", "ASIANPAINT", "MARUTI",
+        "SUNPHARMA", "TITAN", "ULTRACEMCO", "HCLTECH", "WIPRO",
+        "NESTLEIND", "TECHM", "NTPC", "POWERGRID", "TATAMOTORS",
+        "TATASTEEL", "ADANIPORTS", "JSWSTEEL", "ONGC", "COALINDIA",
+        "GRASIM", "BPCL", "DRREDDY", "CIPLA", "EICHERMOT",
+        "DIVISLAB", "HEROMOTOCO", "SBILIFE", "HDFCLIFE", "BRITANNIA",
+        "APOLLOHOSP", "BAJAJFINSV", "ADANIENT", "INDUSINDBK",
+        "TATACONSUM", "SHREECEM", "UPL", "ZOMATO", "HINDALCO", "MM",
     ]
-    return demo
 
 
-# ── Background price refresh ──────────────────────────────────────────────────
+# ── Fuzzy search ──────────────────────────────────────────────────────────────
+
+def fuzzy_search_stocks(query: str, all_stocks: dict, limit: int = 20):
+    query_up    = query.upper().strip()
+    results     = []
+    suggestions = []
+
+    try:
+        from rapidfuzz import process, fuzz
+
+        corpus_tickers = list(all_stocks.keys())
+        corpus_names   = [info["name"] for info in all_stocks.values()]
+
+        ticker_matches = process.extract(
+            query_up, corpus_tickers,
+            scorer=fuzz.partial_ratio, limit=limit, score_cutoff=60
+        )
+        matched = set()
+        for match, score, _ in ticker_matches:
+            matched.add(match)
+            results.append({
+                "ticker":      match,
+                **all_stocks[match],
+                "match_score": score,
+                "match_type":  "ticker",
+            })
+
+        name_matches = process.extract(
+            query_up,
+            [n.upper() for n in corpus_names],
+            scorer=fuzz.partial_ratio, limit=limit, score_cutoff=60
+        )
+        for match, score, idx in name_matches:
+            ticker = corpus_tickers[idx]
+            if ticker not in matched:
+                matched.add(ticker)
+                results.append({
+                    "ticker":      ticker,
+                    **all_stocks[ticker],
+                    "match_score": score,
+                    "match_type":  "name",
+                })
+
+        results.sort(key=lambda x: x["match_score"], reverse=True)
+        results = results[:limit]
+
+        if results and results[0]["match_score"] < 95:
+            top = results[0]
+            suggestions.append({
+                "ticker": top["ticker"],
+                "name":   top["name"],
+                "score":  top["match_score"],
+            })
+
+    except ImportError:
+        for ticker, info in all_stocks.items():
+            if query_up in ticker or query_up in info["name"].upper():
+                results.append({"ticker": ticker, **info, "match_type": "partial"})
+                if len(results) >= limit:
+                    break
+
+    return results, suggestions
+
+
+# ── Background threads ────────────────────────────────────────────────────────
 
 def price_refresh_loop():
     while True:
@@ -88,15 +203,43 @@ def price_refresh_loop():
         time.sleep(60)
 
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+def nifty500_refresh_loop():
+    while True:
+        time.sleep(86400)
+        try:
+            global _NIFTY500_LAST_FETCH
+            _NIFTY500_LAST_FETCH = 0
+            fetch_nifty500_tickers()
+            print("Nifty 500 list refreshed.")
+        except Exception as e:
+            print(f"Nifty 500 refresh error: {e}")
 
-@app.on_event("startup")
-def startup():
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
     print("Database ready.")
-    t = threading.Thread(target=price_refresh_loop, daemon=True)
-    t.start()
-    print("Price refresh thread started (every 60 seconds).")
+    load_nse_stocks()
+    fetch_nifty500_tickers()
+    threading.Thread(target=price_refresh_loop,    daemon=True).start()
+    threading.Thread(target=nifty500_refresh_loop, daemon=True).start()
+    threading.Thread(target=fetch_live_prices,     daemon=True).start()
+    print("Background threads started.")
+    yield
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="Paper Trade Arena API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -106,63 +249,71 @@ def root():
     return {"message": "Paper Trade Arena API is running"}
 
 
-@app.get("/signals")
-def get_signals():
-    """
-    Detects today's patterns across all 8 stocks.
-    If no real patterns found, uses cached DB signals.
-    If no cached signals, uses demo signals for hackathon.
-    Calls AI to generate explanations and saves to DB.
-    """
-    # Step 1: Try to detect real patterns
-    raw_signals = detect_patterns_for_all_stocks()
+@app.get("/nifty500")
+def get_nifty500():
+    tickers = fetch_nifty500_tickers()
+    return {"tickers": tickers, "count": len(tickers)}
 
-    # Step 2: No real patterns today
-    if not raw_signals:
-        # Check if we have cached signals in DB already
-        existing = get_all_signals()
-        if existing:
-            return {"signals": existing, "source": "cached"}
-        # Nothing in DB either — use demo signals
-        raw_signals = get_demo_signals()
 
-    # Step 3: Enrich with AI explanations
-    enriched = process_signals(raw_signals)
+@app.get("/stocks")
+def get_stocks(search: str = ""):
+    all_stocks  = load_nse_stocks()
+    prices      = get_all_live_prices()
+    suggestions = []
 
-    # Step 4: Save to DB and attach IDs
-    final = []
-    for s in enriched:
-        signal_id = save_signal(
-            ticker      = s["ticker"],
-            stock_name  = s["stock_name"],
-            pattern     = s["pattern"],
-            direction   = s["direction"],
-            price       = s["price"],
-            win_rate    = s["win_rate"],
-            conviction  = s["conviction"],
-            explanation = s["explanation"],
-        )
-        s["id"] = signal_id
-        final.append(s)
+    if not search or len(search.strip()) < 2:
+        nifty500 = fetch_nifty500_tickers()
+        stocks = []
+        for ticker in nifty500:
+            info = all_stocks.get(ticker, {})
+            stocks.append({
+                "ticker": ticker,
+                "name":   info.get("name", ticker),
+                "sector": info.get("sector", "NSE"),
+                "price":  prices.get(ticker, None),
+            })
+        return {
+            "stocks":      stocks,
+            "total":       len(stocks),
+            "mode":        "nifty500",
+            "suggestions": [],
+        }
 
-    return {"signals": final, "source": "fresh"}
+    results, suggestions = fuzzy_search_stocks(search, all_stocks, limit=20)
+
+    for r in results[:10]:
+        if r["ticker"] not in prices:
+            price = fetch_price_for_ticker(r["ticker"])
+            if price:
+                prices[r["ticker"]] = price
+
+    stocks = [{
+        "ticker":     r["ticker"],
+        "name":       r["name"],
+        "sector":     r.get("sector", "NSE"),
+        "price":      prices.get(r["ticker"], None),
+        "match_type": r.get("match_type", ""),
+    } for r in results]
+
+    return {
+        "stocks":      stocks,
+        "total":       len(stocks),
+        "mode":        "search",
+        "suggestions": suggestions,
+    }
 
 
 @app.get("/prices")
 def get_prices():
-    """Returns latest live prices for all stocks."""
-    prices = get_all_live_prices()
-    return {"prices": prices}
+    return {"prices": get_all_live_prices()}
 
 
 @app.get("/portfolio")
 def get_portfolio():
-    """
-    Returns cash balance + all open positions with live P&L.
-    """
     cash        = get_cash_balance()
     open_trades = get_open_trades()
     live_prices = get_all_live_prices()
+    all_stocks  = load_nse_stocks()
 
     holdings    = []
     total_value = cash
@@ -183,19 +334,17 @@ def get_portfolio():
         holdings.append({
             "trade_id":       trade["id"],
             "ticker":         ticker,
+            "name":           all_stocks.get(ticker, {}).get("name", ticker),
             "direction":      direction,
             "qty":            trade["qty"],
             "buy_price":      trade["buy_price"],
             "current_price":  round(ltp, 2),
             "unrealised_pnl": round(unrealised_pnl, 2),
             "return_pct":     round((unrealised_pnl / position_value) * 100, 2),
-            "pattern":        trade.get("pattern", ""),
-            "explanation":    trade.get("explanation", ""),
         })
 
     overall_pnl     = total_value - 1000000
     overall_pnl_pct = round((overall_pnl / 1000000) * 100, 2)
-
     update_leaderboard_realuser(round(total_value, 2))
 
     return {
@@ -210,72 +359,68 @@ def get_portfolio():
 
 @app.post("/trade")
 def place_trade(req: TradeRequest):
-    """User clicks Buy — deduct cash, save trade."""
+    all_stocks = load_nse_stocks()
+    if req.ticker not in all_stocks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ticker {req.ticker} not found in NSE stock list"
+        )
+    if req.qty <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be at least 1")
+
     cash = get_cash_balance()
     cost = req.qty * req.buy_price
-
     if cost > cash:
         raise HTTPException(
             status_code=400,
             detail=f"Not enough cash. Need ₹{cost:.0f}, have ₹{cash:.0f}"
         )
 
-    new_cash = cash - cost
-    update_cash_balance(new_cash)
-
+    update_cash_balance(cash - cost)
     trade_id = save_trade(
-        signal_id = req.signal_id,
         ticker    = req.ticker,
         direction = req.direction,
         qty       = req.qty,
         buy_price = req.buy_price,
+        signal_id = None,
     )
 
     return {
         "success":        True,
         "trade_id":       trade_id,
-        "cash_remaining": round(new_cash, 2),
-        "message":        f"Bought {req.qty} × {req.ticker} @ ₹{req.buy_price}"
+        "cash_remaining": round(cash - cost, 2),
+        "message":        f"{req.direction} {req.qty} × {req.ticker} @ ₹{req.buy_price}"
     }
 
 
 @app.post("/exit")
 def exit_trade(req: ExitRequest):
-    """User clicks Exit — close position, calculate P&L."""
     open_trades = get_open_trades()
     trade = next((t for t in open_trades if t["id"] == req.trade_id), None)
 
     if not trade:
         raise HTTPException(
-            status_code=404,
-            detail="Trade not found or already closed"
+            status_code=404, detail="Trade not found or already closed"
         )
 
-    pnl = close_trade(req.trade_id, req.sell_price)
-
-    proceeds     = trade["buy_price"] * trade["qty"] + pnl
-    current_cash = get_cash_balance()
-    update_cash_balance(current_cash + proceeds)
-
-    is_hit = pnl > 0
-    update_signal_outcome(trade["signal_id"], "HIT" if is_hit else "MISS")
+    pnl      = close_trade(req.trade_id, req.sell_price)
+    proceeds = trade["buy_price"] * trade["qty"] + pnl
+    update_cash_balance(get_cash_balance() + proceeds)
 
     return {
         "success": True,
         "pnl":     round(pnl, 2),
-        "outcome": "HIT" if is_hit else "MISS",
+        "outcome": "PROFIT" if pnl > 0 else "LOSS",
         "message": f"Exited {trade['ticker']}. P&L: ₹{pnl:+.2f}"
     }
 
 
 @app.get("/audit")
 def get_audit():
-    """Returns full trade history with AI reasoning attached."""
     trades   = get_all_trades()
     closed   = [t for t in trades if t["status"] == "CLOSED"]
-    hits     = [t for t in closed if t.get("pnl", 0) > 0]
+    hits     = [t for t in closed if (t.get("pnl") or 0) > 0]
     accuracy = round(len(hits) / len(closed) * 100, 1) if closed else None
-
     return {
         "trades":       trades,
         "accuracy":     accuracy,
@@ -286,12 +431,23 @@ def get_audit():
 
 @app.get("/leaderboard")
 def get_leaderboard_route():
-    """Returns all users ranked by portfolio value."""
-    rows = get_leaderboard()
-    return {"leaderboard": rows}
+    return {"leaderboard": get_leaderboard()}
 
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+@app.get("/price/{ticker}")
+def get_single_price(ticker: str):
+    ticker = ticker.upper()
+    cached = get_live_price(ticker)
+    if cached:
+        return {"ticker": ticker, "price": cached, "source": "cache"}
+    price = fetch_price_for_ticker(ticker)
+    if price:
+        return {"ticker": ticker, "price": price, "source": "live"}
+    raise HTTPException(
+        status_code=404,
+        detail=f"Could not fetch price for {ticker}"
+    )
+
 
 if __name__ == "__main__":
     import uvicorn

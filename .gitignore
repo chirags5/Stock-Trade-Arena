@@ -1,11 +1,30 @@
+# Virtual environments
 myenv/
 venv/
 env/
-backend/__pycache__/
-backend/*.pyc
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Backend
 backend/.env
 backend/arena.db
+backend/nse_stocks_cache.json
+
+# Frontend
 frontend/node_modules/
 frontend/build/
-.DS_Store
+frontend/.env.local
+
+# Logs
 *.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
