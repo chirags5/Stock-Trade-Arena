@@ -3,7 +3,7 @@ import axios from 'axios';
 
 export default function Leaderboard({ API }) {
   const [leaderboard, setLeaderboard] = useState([]);
-  const [loading, setLoading]         = useState(true);
+  const [loading, setLoading]         = useState(false);
 
   useEffect(() => {
     fetchLeaderboard();
@@ -20,15 +20,6 @@ export default function Leaderboard({ API }) {
     } finally {
       setLoading(false);
     }
-  }
-
-  if (loading) {
-    return (
-      <div style={styles.loadingWrap}>
-        <div style={styles.loadingSpinner} />
-        <div style={styles.loadingText}>Fetching leaderboard...</div>
-      </div>
-    );
   }
 
   return (
@@ -143,9 +134,6 @@ export default function Leaderboard({ API }) {
 
 const styles = {
   wrapper: { width: '100%' },
-  loadingWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '80px 20px', gap: '16px' },
-  loadingSpinner: { width: '32px', height: '32px', border: '3px solid var(--glass-border)', borderTop: '3px solid var(--tab-active)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
-  loadingText: { fontSize: '14px', color: 'var(--text-secondary)' },
   
   glassPanel: {
     backgroundColor: 'var(--glass-bg)',
