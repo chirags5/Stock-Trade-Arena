@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import axios from 'axios';
 
 export default function Portfolio({ API, prices, portfolio, onExit }) {
+  const [editingSlTp, setEditingSlTp] = useState(null);
+  const [slTpEdit, setSlTpEdit] = useState({ sl: '', tp: '' });
 
   async function handleExit(tradeId, ticker) {
     const sellPrice = prices[ticker] || 0;
@@ -13,6 +15,19 @@ export default function Portfolio({ API, prices, portfolio, onExit }) {
       onExit();
     } catch (e) {
       alert(e.response?.data?.detail || 'Exit failed');
+    }
+  }
+
+  async function saveThresholds(tradeId) {
+    try {
+      await axios.put(`${API}/thresholds/${tradeId}`, {
+        stop_loss: slTpEdit.sl ? parseFloat(slTpEdit.sl) : null,
+        take_profit: slTpEdit.tp ? parseFloat(slTpEdit.tp) : null,
+      });
+      setEditingSlTp(null);
+      onExit();
+    } catch (e) {
+      alert('Failed to update thresholds');
     }
   }
 
@@ -73,7 +88,7 @@ export default function Portfolio({ API, prices, portfolio, onExit }) {
             <table style={styles.table}>
               <thead>
                 <tr>
-                  {['Stock','Direction','Qty','Bought @','Now @','P&L','Return',''].map(h => (
+                  {['Stock','Direction','Qty','Bought @','Now @','P&L','Return','Stop Loss','Take Profit',''].map(h => (
                     <th key={h} style={styles.th}>{h}</th>
                   ))}
                 </tr>
@@ -114,13 +129,58 @@ export default function Portfolio({ API, prices, portfolio, onExit }) {
                     }}>
                       {h.return_pct >= 0 ? '+' : ''}{h.return_pct}%
                     </td>
+                    <td style={styles.td}>
+                      {editingSlTp === h.trade_id ? (
+                        <input
+                          type="number"
+                          placeholder="₹ price"
+                          value={slTpEdit.sl}
+                          onChange={e => setSlTpEdit(prev => ({ ...prev, sl: e.target.value }))}
+                          style={styles.slInput}
+                        />
+                      ) : (
+                        <span style={{ color: 'var(--red-text)', fontWeight: 600 }}>
+                          {h.stop_loss ? `₹${h.stop_loss}` : '—'}
+                        </span>
+                      )}
+                    </td>
+                    <td style={styles.td}>
+                      {editingSlTp === h.trade_id ? (
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          <input
+                            type="number"
+                            placeholder="₹ price"
+                            value={slTpEdit.tp}
+                            onChange={e => setSlTpEdit(prev => ({ ...prev, tp: e.target.value }))}
+                            style={styles.slInput}
+                          />
+                          <button onClick={() => saveThresholds(h.trade_id)} style={styles.saveBtn}>✓</button>
+                          <button onClick={() => setEditingSlTp(null)} style={styles.cancelBtn}>✕</button>
+                        </div>
+                      ) : (
+                        <span style={{ color: 'var(--green-text)', fontWeight: 600 }}>
+                          {h.take_profit ? `₹${h.take_profit}` : '—'}
+                        </span>
+                      )}
+                    </td>
                     <td style={styles.tdRight}>
-                      <button
-                        onClick={() => handleExit(h.trade_id, h.ticker)}
-                        style={styles.exitBtn}
-                      >
-                        Exit Position
-                      </button>
+                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                        <button
+                          onClick={() => {
+                            setEditingSlTp(h.trade_id);
+                            setSlTpEdit({ sl: h.stop_loss || '', tp: h.take_profit || '' });
+                          }}
+                          style={styles.editSlTpBtn}
+                        >
+                          🛡 Set SL/TP
+                        </button>
+                        <button
+                          onClick={() => handleExit(h.trade_id, h.ticker)}
+                          style={styles.exitBtn}
+                        >
+                          Exit
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -205,6 +265,45 @@ const styles = {
   tickerText: { fontSize: '15px', fontWeight: '600' },
   
   dirBadge: { fontSize: '11px', fontWeight: '600', padding: '4px 10px', borderRadius: '6px' },
+
+  slInput: {
+    width: '90px',
+    padding: '5px 8px',
+    border: '1px solid var(--glass-border)',
+    borderRadius: '6px',
+    fontSize: '12px',
+    outline: 'none',
+    backgroundColor: 'var(--input-bg)',
+    color: 'var(--text-primary)',
+  },
+  editSlTpBtn: {
+    padding: '6px 10px',
+    border: '1px solid var(--glass-border)',
+    borderRadius: '6px',
+    backgroundColor: 'var(--table-header-bg)',
+    color: 'var(--text-secondary)',
+    fontSize: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+  },
+  saveBtn: {
+    padding: '5px 10px',
+    border: 'none',
+    borderRadius: '6px',
+    backgroundColor: '#4caf50',
+    color: '#fff',
+    fontSize: '13px',
+    cursor: 'pointer',
+  },
+  cancelBtn: {
+    padding: '5px 10px',
+    border: 'none',
+    borderRadius: '6px',
+    backgroundColor: 'var(--table-header-bg)',
+    color: 'var(--text-secondary)',
+    fontSize: '13px',
+    cursor: 'pointer',
+  },
   
   exitBtn: { 
     padding: '6px 14px', 

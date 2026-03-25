@@ -1,29 +1,20 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import SignalFeed from './SignalFeed';
 import Portfolio from './Portfolio';
 import AuditLog from './AuditLog';
 import Leaderboard from './Leaderboard';
+import BacktestPage from './BacktestPage';
+import LandingPage from './LandingPage';
 import axios from 'axios';
 
-const API = 'http://localhost:8000';
+const API  = 'http://localhost:8000';
 const TABS = ['Trade', 'Portfolio', 'Audit Trail', 'Leaderboard'];
 
-export default function App() {
-  const [activeTab, setActiveTab]   = useState('Trade');
-  const [prices, setPrices]         = useState({});
-  const [portfolio, setPortfolio]   = useState(null);
-  
-  // 1. Add Theme State (Default to dark to keep your original vibe)
-  const [theme, setTheme] = useState('dark');
-
-  // 2. Apply theme to HTML root element
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
-
-  const toggleTheme = () => {
-    setTheme(prevTheme => prevTheme === 'dark' ? 'light' : 'dark');
-  };
+function PaperTradeArena({ theme, toggleTheme }) {
+  const [activeTab, setActiveTab] = useState('Trade');
+  const [prices,    setPrices]    = useState({});
+  const [portfolio, setPortfolio] = useState(null);
 
   useEffect(() => {
     fetchPrices();
@@ -39,54 +30,39 @@ export default function App() {
     try {
       const res = await axios.get(`${API}/prices`);
       setPrices(res.data.prices);
-    } catch (e) {
-      console.error('Price fetch error:', e);
-    }
+    } catch (e) { console.error('Price fetch error:', e); }
   }
 
   async function fetchPortfolio() {
     try {
       const res = await axios.get(`${API}/portfolio`);
       setPortfolio(res.data);
-    } catch (e) {
-      console.error('Portfolio fetch error:', e);
-    }
+    } catch (e) { console.error('Portfolio fetch error:', e); }
   }
 
   return (
     <div style={styles.root}>
-      {/* Top Header Section */}
       <div style={styles.header}>
         <div>
           <div style={styles.headerTitle}>Paper Trade Arena</div>
           <div style={styles.headerSub}>Practice trading with ₹10,00,000 virtual money</div>
         </div>
-        
-        {/* Theme Toggle Button */}
-        <button onClick={toggleTheme} style={styles.themeToggle}>
-          {theme === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode'}
-        </button>
-        
-        {/* Glass Stat Boxes */}
         {portfolio && (
           <div style={styles.headerStats}>
             <div style={{...styles.statBox, ...styles.statBoxNeutral}}>
               <div style={styles.statLabel}>Cash</div>
               <div style={styles.statValue}>₹{portfolio.cash_balance.toLocaleString('en-IN')}</div>
             </div>
-            
             <div style={{...styles.statBox, ...styles.statBoxGold}}>
               <div style={styles.statLabel}>Portfolio</div>
               <div style={styles.statValue}>₹{portfolio.total_value.toLocaleString('en-IN')}</div>
             </div>
-            
             <div style={{...styles.statBox, ...(portfolio.overall_pnl >= 0 ? styles.statBoxGreen : styles.statBoxRed)}}>
               <div style={styles.statLabel}>Total P&L</div>
               <div style={{ ...styles.statValue, color: portfolio.overall_pnl >= 0 ? 'var(--green-text)' : 'var(--red-text)' }}>
                 {portfolio.overall_pnl >= 0 ? '+' : ''}₹{Math.abs(portfolio.overall_pnl).toLocaleString('en-IN')}
               </div>
             </div>
-            
             <div style={{...styles.statBox, ...(portfolio.overall_pnl_pct >= 0 ? styles.statBoxGreen : styles.statBoxRed)}}>
               <div style={styles.statLabel}>Return</div>
               <div style={{ ...styles.statValue, color: portfolio.overall_pnl_pct >= 0 ? 'var(--green-text)' : 'var(--red-text)' }}>
@@ -97,34 +73,121 @@ export default function App() {
         )}
       </div>
 
-      {/* Tabs Section with Glowing Active State */}
       <div style={styles.tabsContainer}>
         <div style={styles.tabs}>
           {TABS.map(tab => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              style={{
-                ...styles.tab,
-                ...(activeTab === tab ? styles.tabActive : {})
-              }}
-            >
+            <button key={tab} onClick={() => setActiveTab(tab)}
+              style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}>
               {tab}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Main Content Area */}
       <div style={styles.content}>
-        {activeTab === 'Trade'       && <SignalFeed API={API} prices={prices} onTrade={fetchPortfolio} />}
-        {activeTab === 'Portfolio'   && <Portfolio  API={API} prices={prices} portfolio={portfolio} onExit={fetchPortfolio} />}
-        {activeTab === 'Audit Trail' && <AuditLog   API={API} />}
+        {activeTab === 'Trade'       && <SignalFeed  API={API} prices={prices} onTrade={fetchPortfolio} />}
+        {activeTab === 'Portfolio'   && <Portfolio   API={API} prices={prices} portfolio={portfolio} onExit={fetchPortfolio} />}
+        {activeTab === 'Audit Trail' && <AuditLog    API={API} />}
         {activeTab === 'Leaderboard' && <Leaderboard API={API} />}
       </div>
     </div>
   );
 }
+
+export default function App() {
+  const [theme, setTheme] = useState('dark');
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+
+  const isPaperTrade = location.pathname === '/paper-trade';
+  const isBacktest = location.pathname === '/backtest';
+
+  return (
+    <>
+      <nav style={nav.bar}>
+        <div style={nav.brand}>📈 Stock Trade Arena</div>
+        <div style={nav.links}>
+          <button
+            onClick={() => navigate('/paper-trade')}
+            style={{ ...nav.link, ...(isPaperTrade ? nav.linkActive : {}) }}
+          >
+            🏛 Paper Trade Arena
+          </button>
+          <button
+            onClick={() => navigate('/backtest')}
+            style={{ ...nav.link, ...(isBacktest ? nav.linkActive : {}) }}
+          >
+            📊 Backtest
+          </button>
+          <button onClick={toggleTheme} style={nav.themeBtn}>
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
+        </div>
+      </nav>
+
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/paper-trade" element={<PaperTradeArena theme={theme} toggleTheme={toggleTheme} />} />
+        <Route path="/backtest" element={<BacktestPage API={API} />} />
+      </Routes>
+    </>
+  );
+}
+
+const nav = {
+  bar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '0 40px',
+    height: '56px',
+    backgroundColor: 'var(--glass-header)',
+    backdropFilter: 'blur(20px)',
+    borderBottom: '1px solid var(--glass-border)',
+    position: 'sticky',
+    top: 0,
+    zIndex: 500,
+  },
+  brand: {
+    fontSize: '18px',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
+    letterSpacing: '0.02em',
+  },
+  links: { display: 'flex', alignItems: 'center', gap: '8px' },
+  link: {
+    padding: '8px 18px',
+    border: '1px solid transparent',
+    borderRadius: '8px',
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+    fontSize: '14px',
+    fontWeight: '500',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+  linkActive: {
+    backgroundColor: 'var(--tab-shadow)',
+    border: '1px solid var(--tab-active)',
+    color: 'var(--tab-active)',
+    fontWeight: '600',
+  },
+  themeBtn: {
+    padding: '8px 12px',
+    border: '1px solid var(--glass-border)',
+    borderRadius: '8px',
+    background: 'var(--glass-bg)',
+    cursor: 'pointer',
+    fontSize: '16px',
+    marginLeft: '8px',
+  },
+};
 
 const styles = {
   root: { 
