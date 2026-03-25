@@ -165,7 +165,7 @@ const nav = {
     padding: '8px 18px',
     border: '1px solid transparent',
     borderRadius: '8px',
-    background: 'transparent',
+    backgroundColor: 'transparent', /* <--- FIXED: Changed from background to backgroundColor */
     color: 'var(--text-secondary)',
     fontSize: '14px',
     fontWeight: '500',
@@ -182,7 +182,7 @@ const nav = {
     padding: '8px 12px',
     border: '1px solid var(--glass-border)',
     borderRadius: '8px',
-    background: 'var(--glass-bg)',
+    backgroundColor: 'var(--glass-bg)', /* <--- FIXED: Changed from background to backgroundColor */
     cursor: 'pointer',
     fontSize: '16px',
     marginLeft: '8px',
@@ -287,7 +287,7 @@ const styles = {
   tab: { 
     padding: '20px 24px', 
     border: 'none', 
-    background: 'transparent', 
+    backgroundColor: 'transparent', /* <--- FIXED: Changed from background to backgroundColor */
     fontSize: '16px', 
     fontWeight: '500', 
     color: 'var(--text-secondary)', // Updated

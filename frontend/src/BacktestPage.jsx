@@ -105,12 +105,12 @@ export default function BacktestPage({ API }) {
             <div style={p.cardTitle}>Strategy</div>
             <div style={p.patternList}>
               {PATTERNS.map(pat => (
-                <button key={pat}
+                <div key={pat}
                   onClick={() => handlePatternChange(pat)}
                   style={{ ...p.patternBtn, ...(pattern === pat ? p.patternActive : {}) }}>
                   <div style={p.patternName}>{pat}</div>
                   <div style={p.patternDesc}>{PATTERN_DESC[pat]}</div>
-                </button>
+                </div>
               ))}
             </div>
           </div>
@@ -120,10 +120,10 @@ export default function BacktestPage({ API }) {
               <div style={p.cardTitle}>Recent</div>
               <div style={p.recentList}>
                 {recentList.map(t => (
-                  <button key={t} style={p.recentChip}
+                  <div key={t} style={p.recentChip}
                     onClick={() => { setSearch(t); setTicker(t); runBacktest(t, pattern); }}>
                     {t}
-                  </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -138,10 +138,10 @@ export default function BacktestPage({ API }) {
               <div style={p.emptySub}>Try RELIANCE, TCS, HDFCBANK, INFY, BHARTIARTL</div>
               <div style={p.quickTickers}>
                 {['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK'].map(t => (
-                  <button key={t} style={p.quickBtn}
+                  <div key={t} style={p.quickBtn}
                     onClick={() => { setSearch(t); setTicker(t); runBacktest(t, pattern); }}>
                     {t}
-                  </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -183,8 +183,8 @@ export default function BacktestPage({ API }) {
               <div style={p.statsGrid}>
                 {[
                   { label: 'Total Return',  val: `${result.total_return_pct >= 0 ? '+' : ''}${result.total_return_pct}%`,  good: result.total_return_pct >= 0 },
-                  { label: 'Win Rate',      val: `${result.win_rate}%`,           good: result.win_rate >= 50 },
-                  { label: 'Total Trades',  val: result.total_trades,             good: true, neutral: true },
+                  { label: 'Win Rate',      val: `${result.win_rate}%`,          good: result.win_rate >= 50 },
+                  { label: 'Total Trades',  val: result.total_trades,            good: true, neutral: true },
                   { label: 'Max Drawdown',  val: `-${result.max_drawdown_pct}%`,  good: false },
                   { label: 'Final Capital', val: `₹${result.final_capital.toLocaleString('en-IN')}`, good: result.final_capital >= 100000, neutral: false },
                   { label: 'Avg P&L/Trade', val: `₹${result.avg_pnl?.toLocaleString('en-IN') || 0}`, good: result.avg_pnl >= 0 },
