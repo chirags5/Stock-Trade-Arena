@@ -1,95 +1,186 @@
-from database import get_historical_prices
+import yfinance as yf
+import statistics
+from datetime import datetime, timedelta
+
+_cache = {}  # ticker -> rows, so yfinance only downloads once per session
 
 
-def calculate_win_rate(ticker, pattern_fn, lookahead_days=5):
-    """
-    Loops through 2 years of historical data.
-    Every time the pattern appeared in the past,
-    checks if the price went up after lookahead_days.
-    Returns win_rate % and how many times pattern appeared.
-    """
-    rows = get_historical_prices(ticker, limit=500)
+def get_ohlcv(ticker):
+    ticker = ticker.upper()
+    if ticker in _cache:
+        return _cache[ticker]
 
-    if len(rows) < 30:
-        return 50.0, 0
+    try:
+        end_date = datetime.today().strftime('%Y-%m-%d')
+        start_date = (datetime.today() - timedelta(days=730)).strftime('%Y-%m-%d')
+
+        df = yf.download(
+            f"{ticker}.NS",
+            start=start_date,
+            end=end_date,
+            interval="1d",
+            progress=False,
+            auto_adjust=True,
+            actions=False,
+        )
+        if df.empty or len(df) < 30:
+            df = yf.download(
+                ticker,
+                start=start_date,
+                end=end_date,
+                interval="1d",
+                progress=False,
+                auto_adjust=True,
+                actions=False,
+            )
+        if df.empty or len(df) < 30:
+            return None
+
+        # Fix for newer yfinance MultiIndex columns.
+        if hasattr(df.columns, 'levels'):
+            df.columns = df.columns.get_level_values(0)
+
+        rows = []
+        for date, row in df.iterrows():
+            try:
+                rows.append({
+                    "date":   str(date.date()),
+                    "close":  float(row["Close"]),
+                    "high":   float(row["High"]),
+                    "low":    float(row["Low"]),
+                    "volume": float(row["Volume"]),
+                })
+            except Exception:
+                continue
+
+        # Safety check — if only a few unique dates are returned, data is likely wrong.
+        if len(rows) > 5:
+            unique_dates = len(set(r["date"] for r in rows))
+            if unique_dates < 10:
+                print(f"[WARN] {ticker} returned suspicious data — only {unique_dates} unique dates")
+                return None
+
+        if len(rows) < 30:
+            return None
+
+        _cache[ticker] = rows
+        return rows
+    except Exception as e:
+        print(f"yfinance error for {ticker}: {e}")
+        return None
+
+
+def run_backtest(ticker, pattern_name, initial_capital=100000, lookahead_days=5):
+    rows = get_ohlcv(ticker)
+
+    if not rows or len(rows) < 30:
+        return None
 
     closes  = [r["close"]  for r in rows]
     highs   = [r["high"]   for r in rows]
     lows    = [r["low"]    for r in rows]
     volumes = [r["volume"] for r in rows]
+    dates   = [r["date"]   for r in rows]
 
-    hits  = 0
-    total = 0
+    fn = PATTERN_FNS.get(pattern_name)
+    if not fn:
+        return None
 
-    # Start at day 25 so patterns have enough lookback data
-    # Stop 5 days before the end so we can check outcome
+    capital = initial_capital
+    trades  = []
+    equity  = [{"date": dates[0], "value": initial_capital}]
+
     for i in range(25, len(closes) - lookahead_days):
         c_slice = closes[:i+1]
         v_slice = volumes[:i+1]
         l_slice = lows[:i+1]
 
-        pattern_found = pattern_fn(c_slice, v_slice, l_slice)
+        if not fn(c_slice, v_slice, l_slice):
+            continue
 
-        if pattern_found:
-            total += 1
-            # Did price go up after lookahead_days?
-            price_now   = closes[i]
-            price_later = closes[i + lookahead_days]
+        entry   = closes[i]
+        exit_   = closes[i + lookahead_days]
+        qty     = max(1, int((capital * 0.10) / entry))
+        pnl     = round((exit_ - entry) * qty, 2)
+        capital += pnl
 
-            if price_later > price_now:
-                hits += 1
+        trades.append({
+            "date":          dates[i],
+            "entry":         round(entry, 2),
+            "exit":          round(exit_, 2),
+            "qty":           qty,
+            "pnl":           pnl,
+            "return_pct":    round(((exit_ - entry) / entry) * 100, 2),
+            "capital_after": round(capital, 2),
+        })
+        equity.append({"date": dates[i + lookahead_days], "value": round(capital, 2)})
 
-    if total == 0:
-        return 50.0, 0
+    if not trades:
+        return {
+            "ticker": ticker, "pattern": pattern_name,
+            "total_trades": 0, "win_rate": 0.0,
+            "total_return_pct": 0.0, "max_drawdown_pct": 0.0,
+            "avg_pnl": 0.0, "final_capital": initial_capital,
+            "trades": [], "equity_curve": [],
+        }
 
-    win_rate = round((hits / total) * 100, 1)
-    return win_rate, total
+    wins         = [t for t in trades if t["pnl"] > 0]
+    win_rate     = round(len(wins) / len(trades) * 100, 1)
+    total_return = round((capital - initial_capital) / initial_capital * 100, 2)
+    avg_pnl      = round(sum(t["pnl"] for t in trades) / len(trades), 2)
+
+    peak, max_dd, running = initial_capital, 0.0, initial_capital
+    for t in trades:
+        running = t["capital_after"]
+        peak    = max(peak, running)
+        dd      = (peak - running) / peak * 100
+        max_dd  = max(max_dd, dd)
+
+    return {
+        "ticker":           ticker,
+        "pattern":          pattern_name,
+        "total_trades":     len(trades),
+        "win_rate":         win_rate,
+        "total_return_pct": total_return,
+        "max_drawdown_pct": round(max_dd, 2),
+        "avg_pnl":          avg_pnl,
+        "final_capital":    round(capital, 2),
+        "trades":           trades[-20:],
+        "equity_curve":     equity,
+    }
 
 
-# ── Pattern functions shaped for backtest ────────────────────────────────────
-# These mirror patterns.py logic but take slices as arguments
+# ── Pattern functions ──────────────────────────────────────────────────────────
 
 def bullish_breakout_fn(closes, volumes, lows):
     if len(closes) < 22 or len(volumes) < 22:
         return False
-    import statistics
-    today_close     = closes[-1]
-    today_volume    = volumes[-1]
-    last_20_closes  = closes[-21:-1]
-    last_20_volumes = volumes[-21:-1]
-    highest_20d     = max(last_20_closes)
-    avg_vol         = statistics.mean(last_20_volumes)
+    today_close  = closes[-1]
+    today_volume = volumes[-1]
+    highest_20d  = max(closes[-21:-1])
+    avg_vol      = statistics.mean(volumes[-21:-1])
     return today_close > highest_20d and today_volume > avg_vol * 1.5
 
 
 def support_bounce_fn(closes, volumes, lows):
     if len(closes) < 22 or len(lows) < 22:
         return False
-    import statistics
-    today_close     = closes[-1]
-    yesterday_close = closes[-2]
-    today_low       = lows[-1]
-    last_20_lows    = lows[-21:-1]
-    last_20_volumes = volumes[-21:-1]
-    support_level   = min(last_20_lows)
-    avg_vol         = statistics.mean(last_20_volumes)
-    today_volume    = volumes[-1]
-    near_support    = today_low <= support_level * 1.01
-    bounced_up      = today_close > yesterday_close
-    volume_ok       = today_volume > avg_vol * 1.2
-    return near_support and bounced_up and volume_ok
+    today_close  = closes[-1]
+    yesterday    = closes[-2]
+    today_low    = lows[-1]
+    support      = min(lows[-21:-1])
+    avg_vol      = statistics.mean(volumes[-21:-1])
+    today_volume = volumes[-1]
+    return (today_low <= support * 1.01) and (today_close > yesterday) and (today_volume > avg_vol * 1.2)
 
 
 def bearish_breakdown_fn(closes, volumes, lows):
     if len(closes) < 22 or len(volumes) < 22:
         return False
-    import statistics
-    today_close     = closes[-1]
-    today_volume    = volumes[-1]
-    last_20_closes  = closes[-21:-1]
-    last_20_volumes = volumes[-21:-1]
-    lowest_20d      = min(last_20_closes)
-    avg_vol         = statistics.mean(last_20_volumes)
+    today_close  = closes[-1]
+    today_volume = volumes[-1]
+    lowest_20d   = min(closes[-21:-1])
+    avg_vol      = statistics.mean(volumes[-21:-1])
     return today_close < lowest_20d and today_volume > avg_vol * 1.5
 
 
@@ -101,29 +192,10 @@ PATTERN_FNS = {
 
 
 def get_win_rate(ticker, pattern_name):
-    """
-    Main function called by ai_layer.py and app.py.
-    Returns (win_rate, occurrences) for a given stock + pattern.
-    """
     fn = PATTERN_FNS.get(pattern_name)
     if not fn:
         return 50.0, 0
-    return calculate_win_rate(ticker, fn)
-
-
-if __name__ == "__main__":
-    from database import init_db
-    init_db()
-
-    tickers  = ["RELIANCE", "TCS", "HDFCBANK", "INFY"]
-    patterns = ["Bullish Flag Breakout", "Support Bounce", "Bearish Breakdown"]
-
-    print("\n=== Back-test Results ===\n")
-    for ticker in tickers:
-        print(f"{ticker}:")
-        for pattern in patterns:
-            win_rate, count = get_win_rate(ticker, pattern)
-            print(f"  {pattern}: {win_rate}% win rate ({count} occurrences)")
-        print()
-
-    print("Run next: python ai_layer.py")
+    result = run_backtest(ticker, pattern_name)
+    if not result:
+        return 50.0, 0
+    return result["win_rate"], result["total_trades"]

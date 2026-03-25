@@ -115,6 +115,17 @@ def init_db():
             VALUES (?,?,?)
         """, (username, val, is_real))
 
+    # Migration — add SL/TP columns if not exist.
+    for col_def in [
+        "stop_loss REAL",
+        "take_profit REAL",
+        "auto_exited INTEGER DEFAULT 0",
+    ]:
+        try:
+            c.execute(f"ALTER TABLE trades ADD COLUMN {col_def}")
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
     print("All tables created successfully.")
@@ -251,18 +262,64 @@ def update_signal_outcome(signal_id, outcome):
 
 # ── Trade helpers ─────────────────────────────────────────────────────────────
 
-def save_trade(ticker, direction, qty, buy_price, signal_id=None):
+def save_trade(ticker, direction, qty, buy_price, signal_id=None, stop_loss=None, take_profit=None):
     conn = get_connection()
     cursor = conn.execute("""
         INSERT INTO trades
-            (signal_id, ticker, direction, qty, buy_price, status, buy_time)
-        VALUES (?,?,?,?,?,?,?)
-    """, (signal_id, ticker, direction, qty, buy_price,
-          "OPEN", datetime.now().isoformat()))
+            (signal_id, ticker, direction, qty, buy_price, status, buy_time, stop_loss, take_profit, auto_exited)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+    """, (
+        signal_id,
+        ticker,
+        direction,
+        qty,
+        buy_price,
+        "OPEN",
+        datetime.now().isoformat(),
+        stop_loss,
+        take_profit,
+        0,
+    ))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return trade_id
+
+
+def update_trade_thresholds(trade_id, stop_loss=None, take_profit=None):
+    conn = get_connection()
+    cursor = conn.execute("""
+        UPDATE trades
+        SET stop_loss = ?, take_profit = ?
+        WHERE id = ? AND status = 'OPEN'
+    """, (stop_loss, take_profit, trade_id))
+    conn.commit()
+    changed = cursor.rowcount
+    conn.close()
+    return changed
+
+
+def get_monitored_open_trades():
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT id, ticker, direction, qty, buy_price, stop_loss, take_profit
+        FROM trades
+        WHERE status = 'OPEN'
+          AND (stop_loss IS NOT NULL OR take_profit IS NOT NULL)
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def auto_close_trade(trade_id, sell_price, pnl):
+    conn = get_connection()
+    conn.execute("""
+        UPDATE trades
+        SET sell_price = ?, pnl = ?, status = 'CLOSED', sell_time = ?, auto_exited = 1
+        WHERE id = ?
+    """, (sell_price, pnl, datetime.now().isoformat(), trade_id))
+    conn.commit()
+    conn.close()
 
 
 def close_trade(trade_id, sell_price):

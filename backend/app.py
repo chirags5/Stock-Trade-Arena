@@ -2,6 +2,7 @@ import threading
 import time
 import requests
 from contextlib import asynccontextmanager
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,7 +11,8 @@ from database import (
     init_db, get_cash_balance, update_cash_balance,
     save_trade, close_trade, get_open_trades, get_all_trades,
     get_all_live_prices, get_live_price,
-    get_leaderboard, update_leaderboard_realuser
+    get_leaderboard, update_leaderboard_realuser,
+    get_monitored_open_trades, auto_close_trade, update_trade_thresholds,
 )
 from data_fetcher import (
     fetch_live_prices, fetch_price_for_ticker, load_nse_stocks
@@ -24,11 +26,18 @@ class TradeRequest(BaseModel):
     direction: str
     qty:       int
     buy_price: float
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
 
 
 class ExitRequest(BaseModel):
     trade_id:   int
     sell_price: float
+
+
+class ThresholdRequest(BaseModel):
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
 
 
 # ── Nifty 500 — fetched live from NSE, refreshed every 24 hours ───────────────
@@ -215,6 +224,80 @@ def nifty500_refresh_loop():
             print(f"Nifty 500 refresh error: {e}")
 
 
+def monitor_sl_tp_loop():
+    import yfinance as yf
+
+    while True:
+        try:
+            open_trades = get_monitored_open_trades()
+
+            for trade in open_trades:
+                trade_id = trade["id"]
+                ticker = trade["ticker"]
+                direction = trade["direction"]
+                qty = trade["qty"]
+                buy_price = trade["buy_price"]
+                stop_loss = trade.get("stop_loss")
+                take_profit = trade.get("take_profit")
+
+                try:
+                    df = yf.download(
+                        f"{ticker}.NS",
+                        period="1d",
+                        interval="1m",
+                        progress=False,
+                        auto_adjust=True,
+                        actions=False,
+                    )
+                    if df.empty:
+                        continue
+
+                    if hasattr(df.columns, 'levels'):
+                        df.columns = df.columns.get_level_values(0)
+
+                    price = float(df["Close"].dropna().iloc[-1])
+                    triggered = False
+                    exit_reason = ""
+
+                    if direction == "BUY":
+                        if stop_loss is not None and price <= stop_loss:
+                            triggered = True
+                            exit_reason = "Stop Loss"
+                        elif take_profit is not None and price >= take_profit:
+                            triggered = True
+                            exit_reason = "Take Profit"
+                    else:  # SHORT
+                        if stop_loss is not None and price >= stop_loss:
+                            triggered = True
+                            exit_reason = "Stop Loss"
+                        elif take_profit is not None and price <= take_profit:
+                            triggered = True
+                            exit_reason = "Take Profit"
+
+                    if not triggered:
+                        continue
+
+                    sell_price = round(price, 2)
+                    if direction == "BUY":
+                        pnl = round((sell_price - buy_price) * qty, 2)
+                    else:
+                        pnl = round((buy_price - sell_price) * qty, 2)
+
+                    auto_close_trade(trade_id, sell_price, pnl)
+
+                    proceeds = buy_price * qty + pnl
+                    update_cash_balance(get_cash_balance() + proceeds)
+                    print(f"[AUTO EXIT] {ticker} #{trade_id} - {exit_reason} @ Rs.{sell_price}")
+
+                except Exception as e:
+                    print(f"[Monitor] {ticker} error: {e}")
+
+        except Exception as e:
+            print(f"[Monitor thread] error: {e}")
+
+        time.sleep(30)
+
+
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -226,6 +309,7 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=price_refresh_loop,    daemon=True).start()
     threading.Thread(target=nifty500_refresh_loop, daemon=True).start()
     threading.Thread(target=fetch_live_prices,     daemon=True).start()
+    threading.Thread(target=monitor_sl_tp_loop,    daemon=True).start()
     print("Background threads started.")
     yield
 
@@ -341,6 +425,8 @@ def get_portfolio():
             "current_price":  round(ltp, 2),
             "unrealised_pnl": round(unrealised_pnl, 2),
             "return_pct":     round((unrealised_pnl / position_value) * 100, 2),
+            "stop_loss":      trade.get("stop_loss"),
+            "take_profit":    trade.get("take_profit"),
         })
 
     overall_pnl     = total_value - 1000000
@@ -383,6 +469,8 @@ def place_trade(req: TradeRequest):
         qty       = req.qty,
         buy_price = req.buy_price,
         signal_id = None,
+        stop_loss = req.stop_loss,
+        take_profit = req.take_profit,
     )
 
     return {
@@ -413,6 +501,18 @@ def exit_trade(req: ExitRequest):
         "outcome": "PROFIT" if pnl > 0 else "LOSS",
         "message": f"Exited {trade['ticker']}. P&L: ₹{pnl:+.2f}"
     }
+
+
+@app.put("/thresholds/{trade_id}")
+def set_thresholds(trade_id: int, req: ThresholdRequest):
+    changed = update_trade_thresholds(
+        trade_id=trade_id,
+        stop_loss=req.stop_loss,
+        take_profit=req.take_profit,
+    )
+    if changed == 0:
+        raise HTTPException(status_code=404, detail="Open trade not found")
+    return {"status": "ok"}
 
 
 @app.get("/audit")
@@ -447,6 +547,15 @@ def get_single_price(ticker: str):
         status_code=404,
         detail=f"Could not fetch price for {ticker}"
     )
+
+
+@app.get("/backtest/{ticker}")
+def backtest_endpoint(ticker: str, pattern: str = "Bullish Flag Breakout"):
+    from backtest import run_backtest
+    result = run_backtest(ticker.upper(), pattern)
+    if not result:
+        raise HTTPException(status_code=404, detail="Not enough historical data for this stock.")
+    return result
 
 
 if __name__ == "__main__":
