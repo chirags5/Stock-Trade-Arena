@@ -12,9 +12,9 @@ env/
 backend/.env
 backend/arena.db
 backend/nse_stocks_cache.json
-backend/notifier_config.json      ← 🚨 ADD THIS (contains bot token + email password!)
-backend/alerts.json               ← ADD THIS (runtime generated data)
-backend/watchlist.json            ← ADD THIS (user runtime data)
+backend/notifier_config.json
+backend/alerts.json
+backend/watchlist.json
 
 # Frontend
 frontend/node_modules/
