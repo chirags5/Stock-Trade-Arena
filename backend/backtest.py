@@ -2,7 +2,7 @@ import yfinance as yf
 import statistics
 from datetime import datetime, timedelta
 
-_cache = {}  # ticker -> rows, so yfinance only downloads once per session
+_cache = {}
 
 
 def get_ohlcv(ticker):
@@ -10,22 +10,14 @@ def get_ohlcv(ticker):
     if ticker in _cache:
         return _cache[ticker]
 
-    try:
-        end_date = datetime.today().strftime('%Y-%m-%d')
-        start_date = (datetime.today() - timedelta(days=730)).strftime('%Y-%m-%d')
+    end_date = datetime.today().strftime('%Y-%m-%d')
+    df = None
 
-        df = yf.download(
-            f"{ticker}.NS",
-            start=start_date,
-            end=end_date,
-            interval="1d",
-            progress=False,
-            auto_adjust=True,
-            actions=False,
-        )
-        if df.empty or len(df) < 30:
+    for years in [5, 3, 2, 1]:
+        start_date = (datetime.today() - timedelta(days=365 * years)).strftime('%Y-%m-%d')
+        try:
             df = yf.download(
-                ticker,
+                f"{ticker}.NS",
                 start=start_date,
                 end=end_date,
                 interval="1d",
@@ -33,10 +25,29 @@ def get_ohlcv(ticker):
                 auto_adjust=True,
                 actions=False,
             )
-        if df.empty or len(df) < 30:
-            return None
+            if df is None or df.empty or len(df) < 30:
+                df = yf.download(
+                    ticker,
+                    start=start_date,
+                    end=end_date,
+                    interval="1d",
+                    progress=False,
+                    auto_adjust=True,
+                    actions=False,
+                )
+            if df is not None and not df.empty and len(df) >= 30:
+                print(f"[Backtest] {ticker} - fetched {len(df)} days (~{years}yr)")
+                break
+        except Exception as e:
+            print(f"[Backtest] {ticker} {years}yr fetch failed: {e}")
+            df = None
+            continue
 
-        # Fix for newer yfinance MultiIndex columns.
+    if df is None or df.empty or len(df) < 30:
+        print(f"[Backtest] {ticker} - no usable data found")
+        return None
+
+    try:
         if hasattr(df.columns, 'levels'):
             df.columns = df.columns.get_level_values(0)
 
@@ -53,20 +64,20 @@ def get_ohlcv(ticker):
             except Exception:
                 continue
 
-        # Safety check — if only a few unique dates are returned, data is likely wrong.
-        if len(rows) > 5:
-            unique_dates = len(set(r["date"] for r in rows))
-            if unique_dates < 10:
-                print(f"[WARN] {ticker} returned suspicious data — only {unique_dates} unique dates")
-                return None
-
         if len(rows) < 30:
+            print(f"[Backtest] {ticker} - parsed rows < 30")
+            return None
+
+        unique_dates = len(set(r["date"] for r in rows))
+        if unique_dates < 10:
+            print(f"[WARN] {ticker} suspicious data - only {unique_dates} unique dates")
             return None
 
         _cache[ticker] = rows
         return rows
+
     except Exception as e:
-        print(f"yfinance error for {ticker}: {e}")
+        print(f"[Backtest] {ticker} parse error: {e}")
         return None
 
 
@@ -77,7 +88,6 @@ def run_backtest(ticker, pattern_name, initial_capital=100000, lookahead_days=5)
         return None
 
     closes  = [r["close"]  for r in rows]
-    highs   = [r["high"]   for r in rows]
     lows    = [r["low"]    for r in rows]
     volumes = [r["volume"] for r in rows]
     dates   = [r["date"]   for r in rows]
@@ -101,7 +111,14 @@ def run_backtest(ticker, pattern_name, initial_capital=100000, lookahead_days=5)
         entry   = closes[i]
         exit_   = closes[i + lookahead_days]
         qty     = max(1, int((capital * 0.10) / entry))
-        pnl     = round((exit_ - entry) * qty, 2)
+
+        if pattern_name == "Bearish Breakdown":
+            pnl        = round((entry - exit_) * qty, 2)
+            return_pct = round(((entry - exit_) / entry) * 100, 2)
+        else:
+            pnl        = round((exit_ - entry) * qty, 2)
+            return_pct = round(((exit_ - entry) / entry) * 100, 2)
+
         capital += pnl
 
         trades.append({
@@ -110,7 +127,7 @@ def run_backtest(ticker, pattern_name, initial_capital=100000, lookahead_days=5)
             "exit":          round(exit_, 2),
             "qty":           qty,
             "pnl":           pnl,
-            "return_pct":    round(((exit_ - entry) / entry) * 100, 2),
+            "return_pct":    return_pct,
             "capital_after": round(capital, 2),
         })
         equity.append({"date": dates[i + lookahead_days], "value": round(capital, 2)})
@@ -118,6 +135,9 @@ def run_backtest(ticker, pattern_name, initial_capital=100000, lookahead_days=5)
     if not trades:
         return {
             "ticker": ticker, "pattern": pattern_name,
+            "data_from": dates[0],
+            "data_to": dates[-1],
+            "total_days": len(closes),
             "total_trades": 0, "win_rate": 0.0,
             "total_return_pct": 0.0, "max_drawdown_pct": 0.0,
             "avg_pnl": 0.0, "final_capital": initial_capital,
@@ -139,13 +159,16 @@ def run_backtest(ticker, pattern_name, initial_capital=100000, lookahead_days=5)
     return {
         "ticker":           ticker,
         "pattern":          pattern_name,
+        "data_from":        dates[0],
+        "data_to":          dates[-1],
+        "total_days":       len(closes),
         "total_trades":     len(trades),
         "win_rate":         win_rate,
         "total_return_pct": total_return,
         "max_drawdown_pct": round(max_dd, 2),
         "avg_pnl":          avg_pnl,
         "final_capital":    round(capital, 2),
-        "trades":           trades[-20:],
+        "trades":           trades[-40:],
         "equity_curve":     equity,
     }
 
