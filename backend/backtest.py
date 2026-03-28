@@ -1,5 +1,6 @@
 import yfinance as yf
 import statistics
+import time
 from datetime import datetime, timedelta
 
 _cache = {}
@@ -16,25 +17,38 @@ def get_ohlcv(ticker):
     for years in [5, 3, 2, 1]:
         start_date = (datetime.today() - timedelta(days=365 * years)).strftime('%Y-%m-%d')
         try:
-            df = yf.download(
-                f"{ticker}.NS",
-                start=start_date,
-                end=end_date,
-                interval="1d",
-                progress=False,
-                auto_adjust=True,
-                actions=False,
-            )
-            if df is None or df.empty or len(df) < 30:
-                df = yf.download(
-                    ticker,
-                    start=start_date,
-                    end=end_date,
-                    interval="1d",
-                    progress=False,
-                    auto_adjust=True,
-                    actions=False,
-                )
+            # Retry up to 3 times to handle yfinance cold-start empty responses.
+            for attempt in range(3):
+                try:
+                    df = yf.download(
+                        f"{ticker}.NS",
+                        start=start_date,
+                        end=end_date,
+                        interval="1d",
+                        progress=False,
+                        auto_adjust=True,
+                        actions=False,
+                    )
+                    if df is None or df.empty or len(df) < 30:
+                        df = yf.download(
+                            ticker,
+                            start=start_date,
+                            end=end_date,
+                            interval="1d",
+                            progress=False,
+                            auto_adjust=True,
+                            actions=False,
+                        )
+                    if df is not None and not df.empty and len(df) >= 30:
+                        break
+
+                    print(f"[Backtest] {ticker} attempt {attempt + 1} returned empty, retrying...")
+                    time.sleep(1.5)
+                except Exception as e:
+                    print(f"[Backtest] {ticker} attempt {attempt + 1} error: {e}")
+                    time.sleep(1.5)
+                    continue
+
             if df is not None and not df.empty and len(df) >= 30:
                 print(f"[Backtest] {ticker} - fetched {len(df)} days (~{years}yr)")
                 break
