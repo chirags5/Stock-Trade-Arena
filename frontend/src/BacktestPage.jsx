@@ -168,7 +168,9 @@ export default function BacktestPage({ API }) {
               <div style={p.resultHeader}>
                 <div>
                   <div style={p.resultTitle}>{result.ticker}</div>
-                  <div style={p.resultSub}>{result.pattern} · 2-year backtest · 10% capital per trade</div>
+                  <div style={p.resultSub}>
+                    {result.pattern} · {result.data_from} → {result.data_to} ({result.total_days} trading days)
+                  </div>
                 </div>
                 <div style={{
                   ...p.returnBadge,
@@ -217,7 +219,7 @@ export default function BacktestPage({ API }) {
 
               {result.trades?.length > 0 ? (
                 <div style={p.tableCard}>
-                  <div style={p.tableTitle}>RECENT SIMULATED TRADES (LAST 20)</div>
+                  <div style={p.tableTitle}>RECENT SIMULATED TRADES (LAST 40)</div>
                   <div style={p.tableScroll}>
                     <table style={p.table}>
                       <thead>
