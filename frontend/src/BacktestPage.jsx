@@ -150,8 +150,8 @@ export default function BacktestPage({ API }) {
           {loading && (
             <div style={p.loadingState}>
               <div style={p.spinner} />
-              <div style={p.loadText}>Running backtest on {ticker}...</div>
-              <div style={p.loadSub}>Fetching 2 years of historical data from NSE</div>
+              <div style={p.loadText}>Fetching 5 years of data for {ticker}...</div>
+              <div style={p.loadSub}>First load may take a few seconds</div>
             </div>
           )}
 
