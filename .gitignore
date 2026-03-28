@@ -12,6 +12,9 @@ env/
 backend/.env
 backend/arena.db
 backend/nse_stocks_cache.json
+backend/notifier_config.json
+backend/alerts.json
+backend/watchlist.json
 
 # Frontend
 frontend/node_modules/

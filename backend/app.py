@@ -2,7 +2,7 @@ import threading
 import time
 import requests
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -38,6 +38,22 @@ class ExitRequest(BaseModel):
 class ThresholdRequest(BaseModel):
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+
+
+# ── Scanner request models ────────────────────────────────────────────────────
+
+class WatchlistAddRequest(BaseModel):
+    ticker: str
+    name:   str = ""
+
+
+class NotifierConfigRequest(BaseModel):
+    telegram_token:   str  = ""
+    telegram_chat_id: str  = ""
+    email_enabled:    bool = False
+    email_sender:     str  = ""
+    email_password:   str  = ""        # Only updated if non-empty and not masked
+    email_recipients: List[str] = []
 
 
 # ── Nifty 500 — fetched live from NSE, refreshed every 24 hours ───────────────
@@ -116,12 +132,10 @@ def fetch_nifty500_tickers() -> list:
     except Exception as e:
         print(f"CSV fallback failed: {e}")
 
-    # ── Stale cache ───────────────────────────────────────────────────────────
     if _NIFTY500_CACHE:
         print("Using stale Nifty 500 cache.")
         return _NIFTY500_CACHE
 
-    # ── Absolute fallback: Nifty 50 ───────────────────────────────────────────
     print("Using hardcoded Nifty 50 as fallback.")
     return [
         "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
@@ -232,12 +246,12 @@ def monitor_sl_tp_loop():
             open_trades = get_monitored_open_trades()
 
             for trade in open_trades:
-                trade_id = trade["id"]
-                ticker = trade["ticker"]
-                direction = trade["direction"]
-                qty = trade["qty"]
-                buy_price = trade["buy_price"]
-                stop_loss = trade.get("stop_loss")
+                trade_id    = trade["id"]
+                ticker      = trade["ticker"]
+                direction   = trade["direction"]
+                qty         = trade["qty"]
+                buy_price   = trade["buy_price"]
+                stop_loss   = trade.get("stop_loss")
                 take_profit = trade.get("take_profit")
 
                 try:
@@ -255,39 +269,36 @@ def monitor_sl_tp_loop():
                     if hasattr(df.columns, 'levels'):
                         df.columns = df.columns.get_level_values(0)
 
-                    price = float(df["Close"].dropna().iloc[-1])
-                    triggered = False
-                    exit_reason = ""
+                    price        = float(df["Close"].dropna().iloc[-1])
+                    triggered    = False
+                    exit_reason  = ""
 
                     if direction == "BUY":
                         if stop_loss is not None and price <= stop_loss:
-                            triggered = True
+                            triggered   = True
                             exit_reason = "Stop Loss"
                         elif take_profit is not None and price >= take_profit:
-                            triggered = True
+                            triggered   = True
                             exit_reason = "Take Profit"
-                    else:  # SHORT
+                    else:
                         if stop_loss is not None and price >= stop_loss:
-                            triggered = True
+                            triggered   = True
                             exit_reason = "Stop Loss"
                         elif take_profit is not None and price <= take_profit:
-                            triggered = True
+                            triggered   = True
                             exit_reason = "Take Profit"
 
                     if not triggered:
                         continue
 
                     sell_price = round(price, 2)
-                    if direction == "BUY":
-                        pnl = round((sell_price - buy_price) * qty, 2)
-                    else:
-                        pnl = round((buy_price - sell_price) * qty, 2)
+                    pnl        = round((sell_price - buy_price) * qty, 2) if direction == "BUY" \
+                                 else round((buy_price - sell_price) * qty, 2)
 
                     auto_close_trade(trade_id, sell_price, pnl)
-
                     proceeds = buy_price * qty + pnl
                     update_cash_balance(get_cash_balance() + proceeds)
-                    print(f"[AUTO EXIT] {ticker} #{trade_id} - {exit_reason} @ Rs.{sell_price}")
+                    print(f"[AUTO EXIT] {ticker} #{trade_id} - {exit_reason} @ ₹{sell_price}")
 
                 except Exception as e:
                     print(f"[Monitor] {ticker} error: {e}")
@@ -310,7 +321,11 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=nifty500_refresh_loop, daemon=True).start()
     threading.Thread(target=fetch_live_prices,     daemon=True).start()
     threading.Thread(target=monitor_sl_tp_loop,    daemon=True).start()
-    print("Background threads started.")
+
+    # ── Scanner background thread ─────────────────────────────
+    from scanner import scanner_loop
+    threading.Thread(target=scanner_loop, args=(15,), daemon=True).start()
+    print("Background threads started (incl. Pattern Scanner).")
     yield
 
 
@@ -326,7 +341,9 @@ app.add_middleware(
 )
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+#  EXISTING ROUTES  (unchanged)
+# ══════════════════════════════════════════════════════════════
 
 @app.get("/")
 def root():
@@ -403,15 +420,11 @@ def get_portfolio():
     total_value = cash
 
     for trade in open_trades:
-        ticker    = trade["ticker"]
-        ltp       = live_prices.get(ticker, trade["buy_price"])
-        direction = trade["direction"]
-
-        if direction == "BUY":
-            unrealised_pnl = (ltp - trade["buy_price"]) * trade["qty"]
-        else:
-            unrealised_pnl = (trade["buy_price"] - ltp) * trade["qty"]
-
+        ticker         = trade["ticker"]
+        ltp            = live_prices.get(ticker, trade["buy_price"])
+        direction      = trade["direction"]
+        unrealised_pnl = (ltp - trade["buy_price"]) * trade["qty"] if direction == "BUY" \
+                         else (trade["buy_price"] - ltp) * trade["qty"]
         position_value = trade["buy_price"] * trade["qty"]
         total_value   += position_value + unrealised_pnl
 
@@ -447,37 +460,27 @@ def get_portfolio():
 def place_trade(req: TradeRequest):
     all_stocks = load_nse_stocks()
     if req.ticker not in all_stocks:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Ticker {req.ticker} not found in NSE stock list"
-        )
+        raise HTTPException(status_code=400, detail=f"Ticker {req.ticker} not found in NSE stock list")
     if req.qty <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be at least 1")
 
     cash = get_cash_balance()
     cost = req.qty * req.buy_price
     if cost > cash:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Not enough cash. Need ₹{cost:.0f}, have ₹{cash:.0f}"
-        )
+        raise HTTPException(status_code=400, detail=f"Not enough cash. Need ₹{cost:.0f}, have ₹{cash:.0f}")
 
     update_cash_balance(cash - cost)
     trade_id = save_trade(
-        ticker    = req.ticker,
-        direction = req.direction,
-        qty       = req.qty,
-        buy_price = req.buy_price,
-        signal_id = None,
-        stop_loss = req.stop_loss,
-        take_profit = req.take_profit,
+        ticker=req.ticker, direction=req.direction, qty=req.qty,
+        buy_price=req.buy_price, signal_id=None,
+        stop_loss=req.stop_loss, take_profit=req.take_profit,
     )
 
     return {
         "success":        True,
         "trade_id":       trade_id,
         "cash_remaining": round(cash - cost, 2),
-        "message":        f"{req.direction} {req.qty} × {req.ticker} @ ₹{req.buy_price}"
+        "message":        f"{req.direction} {req.qty} × {req.ticker} @ ₹{req.buy_price}",
     }
 
 
@@ -485,11 +488,8 @@ def place_trade(req: TradeRequest):
 def exit_trade(req: ExitRequest):
     open_trades = get_open_trades()
     trade = next((t for t in open_trades if t["id"] == req.trade_id), None)
-
     if not trade:
-        raise HTTPException(
-            status_code=404, detail="Trade not found or already closed"
-        )
+        raise HTTPException(status_code=404, detail="Trade not found or already closed")
 
     pnl      = close_trade(req.trade_id, req.sell_price)
     proceeds = trade["buy_price"] * trade["qty"] + pnl
@@ -499,17 +499,13 @@ def exit_trade(req: ExitRequest):
         "success": True,
         "pnl":     round(pnl, 2),
         "outcome": "PROFIT" if pnl > 0 else "LOSS",
-        "message": f"Exited {trade['ticker']}. P&L: ₹{pnl:+.2f}"
+        "message": f"Exited {trade['ticker']}. P&L: ₹{pnl:+.2f}",
     }
 
 
 @app.put("/thresholds/{trade_id}")
 def set_thresholds(trade_id: int, req: ThresholdRequest):
-    changed = update_trade_thresholds(
-        trade_id=trade_id,
-        stop_loss=req.stop_loss,
-        take_profit=req.take_profit,
-    )
+    changed = update_trade_thresholds(trade_id=trade_id, stop_loss=req.stop_loss, take_profit=req.take_profit)
     if changed == 0:
         raise HTTPException(status_code=404, detail="Open trade not found")
     return {"status": "ok"}
@@ -543,10 +539,7 @@ def get_single_price(ticker: str):
     price = fetch_price_for_ticker(ticker)
     if price:
         return {"ticker": ticker, "price": price, "source": "live"}
-    raise HTTPException(
-        status_code=404,
-        detail=f"Could not fetch price for {ticker}"
-    )
+    raise HTTPException(status_code=404, detail=f"Could not fetch price for {ticker}")
 
 
 @app.get("/backtest/{ticker}")
@@ -556,6 +549,146 @@ def backtest_endpoint(ticker: str, pattern: str = "Bullish Flag Breakout"):
     if not result:
         raise HTTPException(status_code=404, detail="Not enough historical data for this stock.")
     return result
+
+
+# ══════════════════════════════════════════════════════════════
+#  SCANNER ROUTES  (new)
+# ══════════════════════════════════════════════════════════════
+
+# ── Watchlist ─────────────────────────────────────────────────
+
+@app.get("/watchlist")
+def get_watchlist():
+    from scanner import load_watchlist, MAX_WATCHLIST
+    stocks = load_watchlist()
+    prices = get_all_live_prices()
+    # Attach live price to each watchlist stock
+    for s in stocks:
+        t = s["ticker"]
+        s["price"] = prices.get(t) or fetch_price_for_ticker(t)
+    return {
+        "watchlist": stocks,
+        "count":     len(stocks),
+        "max":       MAX_WATCHLIST,
+    }
+
+
+@app.post("/watchlist")
+def add_watchlist_stock(req: WatchlistAddRequest):
+    from scanner import add_to_watchlist
+    ticker = req.ticker.upper().strip()
+    all_stocks = load_nse_stocks()
+
+    # Resolve name from NSE stock list if not provided
+    name = req.name or all_stocks.get(ticker, {}).get("name", ticker)
+
+    result = add_to_watchlist(ticker, name)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.delete("/watchlist/{ticker}")
+def remove_watchlist_stock(ticker: str):
+    from scanner import remove_from_watchlist
+    result = remove_from_watchlist(ticker.upper())
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+# ── Scanner alerts ────────────────────────────────────────────
+
+@app.get("/scanner/alerts")
+def get_scanner_alerts(limit: int = 100):
+    from scanner import get_recent_alerts
+    alerts = get_recent_alerts(limit)
+    return {"alerts": alerts, "count": len(alerts)}
+
+
+@app.delete("/scanner/alerts")
+def clear_scanner_alerts():
+    from scanner import clear_alerts
+    clear_alerts()
+    return {"success": True, "message": "All alerts cleared"}
+
+
+@app.post("/scanner/run")
+def manual_scan():
+    """Trigger an immediate scan of the watchlist (ignores market hours)."""
+    from scanner import load_watchlist, scan_ticker, _persist_alerts
+    from notifier import send_alert
+
+    watchlist  = load_watchlist()
+    if not watchlist:
+        return {"alerts": [], "message": "Watchlist is empty — add stocks first"}
+
+    all_alerts = []
+    for stock in watchlist:
+        ticker = stock["ticker"]
+        name   = stock.get("name", ticker)
+        alerts = scan_ticker(ticker, name)
+        all_alerts.extend(alerts)
+        for alert in alerts:
+            try:
+                send_alert(
+                    ticker       = alert["ticker"],
+                    name         = alert["name"],
+                    pattern_name = alert["pattern"],
+                    direction    = alert["direction"],
+                    details      = alert["details"],
+                    price        = alert["price"],
+                    category     = alert["category"],
+                )
+            except Exception as e:
+                print(f"[Notifier] {e}")
+
+    _persist_alerts(all_alerts)
+    return {
+        "alerts":  all_alerts,
+        "count":   len(all_alerts),
+        "message": f"Scanned {len(watchlist)} stock(s) — {len(all_alerts)} pattern(s) found",
+    }
+
+
+# ── Notifier config ───────────────────────────────────────────
+
+@app.get("/scanner/config")
+def get_notifier_config():
+    from notifier import get_safe_config
+    return get_safe_config()
+
+
+@app.post("/scanner/config")
+def update_notifier_config(req: NotifierConfigRequest):
+    from notifier import load_config, save_config
+    existing = load_config()
+
+    updated = {
+        "telegram_token":   req.telegram_token   or existing.get("telegram_token", ""),
+        "telegram_chat_id": req.telegram_chat_id or existing.get("telegram_chat_id", ""),
+        "email_enabled":    req.email_enabled,
+        "email_sender":     req.email_sender     or existing.get("email_sender", ""),
+        "email_recipients": req.email_recipients or existing.get("email_recipients", []),
+        # Only update password if user provided a real one (not masked placeholder)
+        "email_password":   req.email_password
+                            if req.email_password and req.email_password != "••••••••"
+                            else existing.get("email_password", ""),
+    }
+    save_config(updated)
+    return {"success": True, "message": "Config saved"}
+
+
+@app.post("/scanner/test-telegram")
+def test_telegram_notification():
+    from notifier import test_telegram
+    return test_telegram()
+
+
+@app.post("/scanner/test-email")
+def test_email_notification():
+    from notifier import test_email
+    return test_email()
 
 
 if __name__ == "__main__":

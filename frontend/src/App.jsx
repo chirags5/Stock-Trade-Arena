@@ -6,6 +6,7 @@ import AuditLog from './AuditLog';
 import Leaderboard from './Leaderboard';
 import BacktestPage from './BacktestPage';
 import LandingPage from './LandingPage';
+import WatchlistScanner from './WatchlistScanner';   // ← new
 import axios from 'axios';
 
 const API  = 'http://localhost:8000';
@@ -96,8 +97,8 @@ function PaperTradeArena({ theme, toggleTheme }) {
 
 export default function App() {
   const [theme, setTheme] = useState('dark');
-  const navigate = useNavigate();
-  const location = useLocation();
+  const navigate  = useNavigate();
+  const location  = useLocation();
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -106,7 +107,8 @@ export default function App() {
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
 
   const isPaperTrade = location.pathname === '/paper-trade';
-  const isBacktest = location.pathname === '/backtest';
+  const isBacktest   = location.pathname === '/backtest';
+  const isScanner    = location.pathname === '/scanner';   // ← new
 
   return (
     <>
@@ -125,6 +127,23 @@ export default function App() {
           >
             📊 Backtest
           </button>
+
+          {/* ── Scanner nav button (new) ── */}
+          <button
+            onClick={() => navigate('/scanner')}
+            style={{ ...nav.link, ...(isScanner ? nav.linkActive : {}), position: 'relative' }}
+          >
+            📡 Scanner
+            {/* Pulse dot to show it's live */}
+            <span style={{
+              position: 'absolute', top: 6, right: 6,
+              width: 6, height: 6, borderRadius: '50%',
+              background: '#22c55e',
+              boxShadow: '0 0 5px #22c55e',
+              animation: 'navPulse 2s infinite',
+            }} />
+          </button>
+
           <button onClick={toggleTheme} style={nav.themeBtn}>
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
@@ -132,10 +151,15 @@ export default function App() {
       </nav>
 
       <Routes>
-        <Route path="/" element={<LandingPage />} />
+        <Route path="/"           element={<LandingPage />} />
         <Route path="/paper-trade" element={<PaperTradeArena theme={theme} toggleTheme={toggleTheme} />} />
-        <Route path="/backtest" element={<BacktestPage API={API} />} />
+        <Route path="/backtest"   element={<BacktestPage API={API} />} />
+        <Route path="/scanner"    element={<WatchlistScanner />} />  {/* ← new */}
       </Routes>
+
+      <style>{`
+        @keyframes navPulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
+      `}</style>
     </>
   );
 }
@@ -165,12 +189,13 @@ const nav = {
     padding: '8px 18px',
     border: '1px solid transparent',
     borderRadius: '8px',
-    backgroundColor: 'transparent', /* <--- FIXED: Changed from background to backgroundColor */
+    backgroundColor: 'transparent',
     color: 'var(--text-secondary)',
     fontSize: '14px',
     fontWeight: '500',
     cursor: 'pointer',
     transition: 'all 0.2s',
+    position: 'relative',
   },
   linkActive: {
     backgroundColor: 'var(--tab-shadow)',
@@ -182,7 +207,7 @@ const nav = {
     padding: '8px 12px',
     border: '1px solid var(--glass-border)',
     borderRadius: '8px',
-    backgroundColor: 'var(--glass-bg)', /* <--- FIXED: Changed from background to backgroundColor */
+    backgroundColor: 'var(--glass-bg)',
     cursor: 'pointer',
     fontSize: '16px',
     marginLeft: '8px',
@@ -190,52 +215,42 @@ const nav = {
 };
 
 const styles = {
-  root: { 
-    minHeight: '100vh', 
-    display: 'flex', 
+  root: {
+    minHeight: '100vh',
+    display: 'flex',
     flexDirection: 'column',
-    transition: 'all 0.4s ease' // Added for smooth theme transitions
+    transition: 'all 0.4s ease',
   },
-  header: { 
-    padding: '28px 40px', 
-    display: 'flex', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    flexWrap: 'wrap', 
-    gap: '24px', 
-    borderBottom: '1px solid var(--glass-border)', // Updated
-    backgroundColor: 'var(--glass-header)', // Updated
+  header: {
+    padding: '28px 40px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '24px',
+    borderBottom: '1px solid var(--glass-border)',
+    backgroundColor: 'var(--glass-header)',
     backdropFilter: 'blur(20px)',
     WebkitBackdropFilter: 'blur(20px)',
   },
-  headerTitle: { 
-    fontSize: '28px', 
-    fontWeight: '700', 
-    color: 'var(--text-primary)', // Updated
+  headerTitle: {
+    fontSize: '28px',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
     letterSpacing: '0.02em',
   },
-  headerSub: { 
-    fontSize: '14px', 
-    color: 'var(--text-secondary)', // Updated
-    marginTop: '6px' 
+  headerSub: {
+    fontSize: '14px',
+    color: 'var(--text-secondary)',
+    marginTop: '6px',
   },
-  themeToggle: {
-    padding: '8px 16px',
-    borderRadius: '20px',
-    border: '1px solid var(--glass-border)',
-    backgroundColor: 'var(--glass-bg)',
-    color: 'var(--text-primary)',
-    fontWeight: '600',
-    backdropFilter: 'blur(10px)',
-    transition: 'all 0.3s ease',
-  },
-  headerStats: { 
-    display: 'flex', 
-    gap: '16px', 
-    flexWrap: 'wrap' 
+  headerStats: {
+    display: 'flex',
+    gap: '16px',
+    flexWrap: 'wrap',
   },
   statBox: {
-    padding: '12px 20px', 
+    padding: '12px 20px',
     borderRadius: '10px',
     display: 'flex',
     flexDirection: 'column',
@@ -243,70 +258,70 @@ const styles = {
     justifyContent: 'center',
     backdropFilter: 'blur(10px)',
     WebkitBackdropFilter: 'blur(10px)',
-    boxShadow: 'var(--glass-shadow)', // Updated
+    boxShadow: 'var(--glass-shadow)',
     transition: 'all 0.3s ease',
-    minWidth: '140px', 
+    minWidth: '140px',
   },
   statBoxNeutral: {
-    backgroundColor: 'var(--glass-bg)', // Updated
-    border: '1px solid var(--glass-border)', // Updated
+    backgroundColor: 'var(--glass-bg)',
+    border: '1px solid var(--glass-border)',
   },
   statBoxGold: {
-    backgroundColor: 'var(--gold-bg)', // Updated
-    border: '1px solid var(--gold-border)', // Updated
+    backgroundColor: 'var(--gold-bg)',
+    border: '1px solid var(--gold-border)',
   },
   statBoxGreen: {
-    backgroundColor: 'var(--green-bg)', // Updated
-    border: '1px solid var(--green-border)', // Updated
+    backgroundColor: 'var(--green-bg)',
+    border: '1px solid var(--green-border)',
   },
   statBoxRed: {
-    backgroundColor: 'var(--red-bg)', // Updated
-    border: '1px solid var(--red-border)', // Updated
+    backgroundColor: 'var(--red-bg)',
+    border: '1px solid var(--red-border)',
   },
-  statLabel: { 
-    fontSize: '12px', 
-    color: 'var(--text-secondary)', // Updated
-    textTransform: 'uppercase', 
+  statLabel: {
+    fontSize: '12px',
+    color: 'var(--text-secondary)',
+    textTransform: 'uppercase',
     letterSpacing: '0.08em',
-    marginBottom: '4px'
+    marginBottom: '4px',
   },
-  statValue: { 
-    fontSize: '18px', 
-    fontWeight: '700', 
-    color: 'var(--text-primary)' // Updated
+  statValue: {
+    fontSize: '18px',
+    fontWeight: '700',
+    color: 'var(--text-primary)',
   },
   tabsContainer: {
-    backgroundColor: 'var(--glass-header)', // Updated
-    borderBottom: '1px solid var(--glass-border)', // Updated
-    padding: '0 40px', 
+    backgroundColor: 'var(--glass-header)',
+    borderBottom: '1px solid var(--glass-border)',
+    padding: '0 40px',
   },
-  tabs: { 
-    display: 'flex', 
+  tabs: {
+    display: 'flex',
     gap: '12px',
   },
-  tab: { 
-    padding: '20px 24px', 
-    border: 'none', 
-    backgroundColor: 'transparent', /* <--- FIXED: Changed from background to backgroundColor */
-    fontSize: '16px', 
-    fontWeight: '500', 
-    color: 'var(--text-secondary)', // Updated
-    borderBottom: '3px solid transparent', 
+  tab: {
+    padding: '20px 24px',
+    border: 'none',
+    backgroundColor: 'transparent',
+    fontSize: '16px',
+    fontWeight: '500',
+    color: 'var(--text-secondary)',
+    borderBottom: '3px solid transparent',
     transition: 'all 0.2s',
     position: 'relative',
-    cursor: 'pointer'
+    cursor: 'pointer',
   },
-  tabActive: { 
-    color: 'var(--text-primary)', // Updated
-    borderBottom: '3px solid var(--tab-active)', // Updated
-    textShadow: '0 0 12px var(--tab-shadow)', // Updated
-    boxShadow: '0 15px 15px -10px var(--tab-shadow)' // Updated
+  tabActive: {
+    color: 'var(--text-primary)',
+    borderBottom: '3px solid var(--tab-active)',
+    textShadow: '0 0 12px var(--tab-shadow)',
+    boxShadow: '0 15px 15px -10px var(--tab-shadow)',
   },
-  content: { 
-    padding: '30px', 
+  content: {
+    padding: '30px',
     flex: 1,
     maxWidth: '1400px',
     margin: '0 auto',
-    width: '100%'
+    width: '100%',
   },
 };
