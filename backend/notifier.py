@@ -13,9 +13,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import requests
-from dotenv import load_dotenv
-
-load_dotenv()
 
 CONFIG_FILE = "notifier_config.json"
 
@@ -159,9 +156,9 @@ def send_email(subject: str, html_body: str) -> dict:
     if not cfg.get("email_enabled"):
         return {"success": False, "message": "Email alerts are disabled"}
 
-    # ── Sender credentials come from .env only ─────────────────
-    sender   = os.getenv("EMAIL_SENDER", "").strip()
-    password = os.getenv("EMAIL_PASSWORD", "").strip()
+    # ── Hardcoded sender credentials ───────────────────────────
+    sender   = "alerttt207@gmail.com"
+    password = "hednyhxhojtrmnot"
 
     recipients = [r.strip() for r in cfg.get("email_recipients", []) if r.strip()]
 
@@ -217,15 +214,18 @@ def test_email() -> dict:
     return send_email("[Stock Scanner] ✅ Email Test", html)
 
 
+# ── Hardcoded Groq API keys — tried in order, auto-fallback ──
+_GROQ_KEYS = [
+    "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",
+    "sk_7OZ5l4F0CxSOOyHQNfzpWGdyb3FYx1ZDrT8baoFtbKlhvCO8evcm",
+    "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",
+]
+
+
 def generate_portfolio_insight(alert: dict, portfolio: dict) -> str:
     try:
         from groq import Groq
 
-        api_key = os.getenv("GROQ_API_KEY", "").strip()
-        if not api_key:
-            return ""
-
-        client     = Groq(api_key=api_key)
         cash       = portfolio.get("cash_balance", 0)
         total      = portfolio.get("total_value", 0)
         pnl        = portfolio.get("overall_pnl", 0)
@@ -264,29 +264,50 @@ Write exactly 4 complete sentences:
 4. Final line must be: RECOMMENDATION: ACT / WAIT / AVOID — [one reason]
 Every sentence must end with a full stop. Stop after sentence 4.
 """
-        response = client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a concise paper trading advisor. Be specific, use actual numbers. "
-                        "Plain English only — no markdown, no bullets, no headers. "
-                        "Exactly 4 sentences. Every sentence ends with a full stop. Stop after sentence 4."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0,
-            reasoning_effort="low",
-            max_completion_tokens=1024,
-        )
-        insight = response.choices[0].message.content.strip()
-        print(f"[Groq] ✓ Insight for {alert.get('ticker')}")
-        return insight
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a concise paper trading advisor. Be specific, use actual numbers. "
+                    "Plain English only — no markdown, no bullets, no headers. "
+                    "Exactly 4 sentences. Every sentence ends with a full stop. Stop after sentence 4."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+
+        last_error = None
+        for idx, api_key in enumerate(_GROQ_KEYS, 1):
+            try:
+                client   = Groq(api_key=api_key)
+                response = client.chat.completions.create(
+                    model="openai/gpt-oss-120b",
+                    messages=messages,
+                    temperature=0,
+                    reasoning_effort="low",
+                    max_completion_tokens=1024,
+                )
+                insight = response.choices[0].message.content.strip()
+                print(f"[Groq] ✓ Insight for {alert.get('ticker')} (key {idx})")
+                return insight
+
+            except Exception as e:
+                err = str(e).lower()
+                # Rate limit, quota, or auth errors → try next key
+                if any(x in err for x in ["rate_limit", "429", "quota", "limit", "auth", "401", "invalid"]):
+                    print(f"[Groq] Key {idx} failed ({type(e).__name__}) — trying next key...")
+                    last_error = e
+                    continue
+                # Any other error (network, timeout etc.) → also try next key
+                print(f"[Groq] Key {idx} error: {e} — trying next key...")
+                last_error = e
+                continue
+
+        print(f"[Groq] All keys exhausted. Last error: {last_error}")
+        return ""
 
     except Exception as e:
-        print(f"[Groq] Error: {e}")
+        print(f"[Groq] Fatal error: {e}")
         return ""
 
 
@@ -307,8 +328,12 @@ def send_alert(
     sell_score:   int  = None,
     portfolio:    dict = None,
 ):
-    emoji    = "🟢" if direction == "BUY" else "🔴" if direction == "SELL" else "🟡"
-    ai_block = ""
+    emoji     = "🟢" if direction == "BUY" else "🔴" if direction == "SELL" else "🟡"
+    has_conflict = (buy_score or 0) > 0 and (sell_score or 0) > 0
+    time_str  = datetime.now().strftime("%d %b %Y %H:%M IST")
+
+    # ── Generate AI insight ONCE — shared by Telegram + Email ──
+    ai_insight = ""
     if portfolio:
         alert_data = {
             "ticker": ticker, "name": name, "pattern": pattern_name,
@@ -316,21 +341,21 @@ def send_alert(
             "category": category, "confidence": confidence,
             "buy_score": buy_score or 0, "sell_score": sell_score or 0,
         }
-        insight = generate_portfolio_insight(alert_data, portfolio)
-        if insight:
-            ai_block = f"\n\n💡 <b>AI Portfolio Analysis:</b>\n{insight}"
-    time_str = datetime.now().strftime("%d %b %Y %H:%M IST")
+        ai_insight = generate_portfolio_insight(alert_data, portfolio)
 
+    # ── Telegram ───────────────────────────────────────────────
     conf_line = ""
     if confidence is not None:
         conf_line = f"📊 Confidence : <b>{confidence}%</b>\n"
     if buy_score is not None and sell_score is not None and (buy_score > 0 or sell_score > 0):
         conf_line += f"   ▲ BUY {buy_score}  vs  ▼ SELL {sell_score}\n"
 
-    cat_label = f" [{category}]" if category else ""
+    cat_label    = f" [{category}]" if category else ""
+    conflict_tag = " ⚡ <i>Conflict resolved</i>" if has_conflict else ""
+    ai_block     = f"\n\n💡 <b>AI Portfolio Analysis:</b>\n{ai_insight}" if ai_insight else ""
 
     tg_msg = (
-        f"{emoji} <b>Final Signal{cat_label}</b>\n\n"
+        f"{emoji} <b>Final Signal{cat_label}</b>{conflict_tag}\n\n"
         f"📌 <b>{name}</b> <code>({ticker})</code>\n"
         f"📈 Decision  : <b>{direction}</b>\n"
         f"🔍 Pattern   : <b>{pattern_name}</b>\n"
@@ -343,9 +368,20 @@ def send_alert(
     )
     send_telegram(tg_msg)
 
+    # ── Email ──────────────────────────────────────────────────
     html = _build_email_html(
-        ticker, name, pattern_name, direction,
-        details, price, category, confidence,
+        ticker       = ticker,
+        name         = name,
+        pattern_name = pattern_name,
+        direction    = direction,
+        details      = details,
+        price        = price,
+        category     = category,
+        confidence   = confidence,
+        buy_score    = buy_score,
+        sell_score   = sell_score,
+        ai_insight   = ai_insight,
+        time_str     = time_str,
     )
     send_email(f"[Stock Scanner] {emoji} {direction} — {ticker} ({pattern_name})", html)
 
@@ -358,83 +394,148 @@ def _build_email_html(
     details:      str,
     price:        float,
     category:     str,
-    confidence:   int = None,
+        confidence:   int  = None,
+        buy_score:    int  = None,
+        sell_score:   int  = None,
+        ai_insight:   str  = "",
+        time_str:     str  = "",
 ) -> str:
-    color    = "#22c55e" if direction == "BUY" else "#ef4444" if direction == "SELL" else "#f59e0b"
-    emoji    = "🟢"      if direction == "BUY" else "🔴"      if direction == "SELL" else "🟡"
-    time_str = datetime.now().strftime("%d %b %Y %H:%M IST")
+        color        = "#22c55e" if direction == "BUY" else "#ef4444" if direction == "SELL" else "#f59e0b"
+        emoji        = "🟢"      if direction == "BUY" else "🔴"      if direction == "SELL" else "🟡"
+        time_str     = time_str or datetime.now().strftime("%d %b %Y %H:%M IST")
+        has_conflict = (buy_score or 0) > 0 and (sell_score or 0) > 0
 
-    conf_row = ""
-    if confidence is not None:
-        bar_width = confidence
-        conf_row = f"""
-          <tr style="border-bottom:1px solid #334155;">
-            <td style="padding:12px 0;color:#94a3b8;font-size:13px;width:120px;">Confidence</td>
-            <td style="padding:12px 0;">
-              <div style="display:flex;align-items:center;gap:10px;">
-                <div style="flex:1;height:6px;border-radius:99px;background:#1e293b;overflow:hidden;">
-                  <div style="width:{bar_width}%;height:100%;background:{color};border-radius:99px;"></div>
+        # ── Conflict badge ─────────────────────────────────────────
+        conflict_badge = ""
+        if has_conflict:
+                conflict_badge = """
+                <span style="display:inline-block;padding:2px 10px;border-radius:99px;
+                                         background:#f59e0b18;border:1px solid #f59e0b44;
+                                         color:#f59e0b;font-size:11px;font-weight:700;
+                                         letter-spacing:0.04em;margin-left:8px;">
+                    ⚡ CONFLICT RESOLVED
+                </span>"""
+
+        # ── Confidence row ─────────────────────────────────────────
+        conf_row = ""
+        if confidence is not None:
+                score_pills = ""
+                if buy_score is not None and sell_score is not None and (buy_score > 0 or sell_score > 0):
+                        score_pills = f"""
+                        <span style="display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;">
+                            <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;
+                                                     background:#22c55e18;color:#22c55e;border:1px solid #22c55e33;">
+                                ▲ BUY {buy_score}
+                            </span>
+                            <span style="font-size:11px;color:#64748b;">vs</span>
+                            <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;
+                                                     background:#ef444418;color:#ef4444;border:1px solid #ef444433;">
+                                ▼ SELL {sell_score}
+                            </span>
+                        </span><br>"""
+
+                conf_row = f"""
+                    <tr style="border-bottom:1px solid #334155;">
+                        <td style="padding:12px 0;color:#94a3b8;font-size:13px;width:120px;">Confidence</td>
+                        <td style="padding:12px 0;">
+                            {score_pills}
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <div style="flex:1;height:6px;border-radius:99px;background:#1e293b;overflow:hidden;">
+                                    <div style="width:{confidence}%;height:100%;background:{color};border-radius:99px;"></div>
+                                </div>
+                                <span style="color:{color};font-weight:800;font-size:14px;">{confidence}%</span>
+                            </div>
+                        </td>
+                    </tr>"""
+
+        # ── AI insight block ───────────────────────────────────────
+        ai_block = ""
+        if ai_insight:
+                ai_block = f"""
+                <tr>
+                    <td colspan="2" style="padding:16px 0 0;">
+                        <div style="background:#0f172a;border-radius:10px;padding:16px;
+                                                border:1px solid #818cf833;">
+                            <div style="font-size:12px;font-weight:700;color:#818cf8;
+                                                    margin-bottom:10px;letter-spacing:0.04em;">
+                                💡 AI PORTFOLIO ANALYSIS
+                            </div>
+                            <div style="font-size:13px;color:#cbd5e1;line-height:1.75;white-space:pre-wrap;">
+                                {ai_insight}
+                            </div>
+                            <div style="margin-top:10px;font-size:10px;color:#475569;font-style:italic;">
+                                ⚠️ AI analysis for educational/paper trading only. Not financial advice.
+                            </div>
+                        </div>
+                    </td>
+                </tr>"""
+
+        return f"""
+        <html>
+        <body style="margin:0;padding:0;background:#0f172a;font-family:'Segoe UI',Arial,sans-serif;">
+            <div style="max-width:560px;margin:32px auto;background:#1e293b;border-radius:16px;
+                                    padding:32px;border:1px solid #334155;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+
+                <!-- Header -->
+                <div style="margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #334155;">
+                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                        <span style="font-size:32px;">{emoji}</span>
+                        <div style="flex:1;">
+                            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
+                                <h2 style="margin:0;color:{color};font-size:22px;letter-spacing:-0.5px;">
+                                    {direction} Signal
+                                </h2>
+                                {conflict_badge}
+                            </div>
+                            <p style="margin:4px 0 0;color:#64748b;font-size:13px;">
+                                {category} &nbsp;·&nbsp; {time_str}
+                            </p>
+                        </div>
+                    </div>
                 </div>
-                <span style="color:{color};font-weight:800;font-size:14px;">{confidence}%</span>
-              </div>
-            </td>
-          </tr>"""
 
-    return f"""
-    <html>
-    <body style="margin:0;padding:0;background:#0f172a;font-family:'Segoe UI',Arial,sans-serif;">
-      <div style="max-width:520px;margin:32px auto;background:#1e293b;border-radius:16px;
-                  padding:32px;border:1px solid #334155;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
-        <div style="margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #334155;">
-          <div style="display:flex;align-items:center;gap:12px;">
-            <span style="font-size:32px;">{emoji}</span>
-            <div>
-              <h2 style="margin:0;color:{color};font-size:22px;letter-spacing:-0.5px;">
-                {direction} Signal
-              </h2>
-              <p style="margin:4px 0 0;color:#64748b;font-size:13px;">
-                {category} &nbsp;·&nbsp; {time_str}
-              </p>
+                <!-- Data table -->
+                <table style="width:100%;border-collapse:collapse;">
+                    <tr style="border-bottom:1px solid #334155;">
+                        <td style="padding:12px 0;color:#94a3b8;font-size:13px;width:120px;">Stock</td>
+                        <td style="padding:12px 0;color:#f1f5f9;font-weight:700;font-size:15px;">
+                            {name}
+                            <span style="color:#64748b;font-weight:400;font-size:13px;"> ({ticker})</span>
+                        </td>
+                    </tr>
+                    <tr style="border-bottom:1px solid #334155;">
+                        <td style="padding:12px 0;color:#94a3b8;font-size:13px;">Pattern</td>
+                        <td style="padding:12px 0;color:#f1f5f9;font-weight:700;">{pattern_name}</td>
+                    </tr>
+                    <tr style="border-bottom:1px solid #334155;">
+                        <td style="padding:12px 0;color:#94a3b8;font-size:13px;">Signal</td>
+                        <td style="padding:12px 0;font-weight:900;font-size:18px;color:{color};">{direction}</td>
+                    </tr>
+                    {conf_row}
+                    <tr style="border-bottom:1px solid #334155;">
+                        <td style="padding:12px 0;color:#94a3b8;font-size:13px;">Price</td>
+                        <td style="padding:12px 0;color:#f1f5f9;font-weight:700;font-size:17px;">₹{price:.2f}</td>
+                    </tr>
+                    <tr style="border-bottom:{'1px solid #334155' if ai_insight else '0'};">
+                        <td style="padding:12px 0;color:#94a3b8;font-size:13px;vertical-align:top;">Details</td>
+                        <td style="padding:12px 0;color:#cbd5e1;line-height:1.6;">{details}</td>
+                    </tr>
+                    {ai_block}
+                </table>
+
+                <!-- Disclaimer -->
+                <div style="margin-top:24px;padding:12px 16px;background:#0f172a;border-radius:8px;
+                                        border-left:3px solid {color};">
+                    <p style="margin:0;color:#64748b;font-size:12px;line-height:1.6;">
+                        ⚠️ This alert is generated for educational and paper trading purposes only.
+                        It does not constitute financial advice. Always do your own research.
+                    </p>
+                </div>
+
+                <p style="margin-top:20px;color:#475569;font-size:12px;text-align:center;">
+                    Paper Trade Arena — Stock Pattern Scanner
+                </p>
             </div>
-          </div>
-        </div>
-        <table style="width:100%;border-collapse:collapse;">
-          <tr style="border-bottom:1px solid #334155;">
-            <td style="padding:12px 0;color:#94a3b8;font-size:13px;width:120px;">Stock</td>
-            <td style="padding:12px 0;color:#f1f5f9;font-weight:700;font-size:15px;">
-              {name}
-              <span style="color:#64748b;font-weight:400;font-size:13px;"> ({ticker})</span>
-            </td>
-          </tr>
-          <tr style="border-bottom:1px solid #334155;">
-            <td style="padding:12px 0;color:#94a3b8;font-size:13px;">Pattern</td>
-            <td style="padding:12px 0;color:#f1f5f9;font-weight:700;">{pattern_name}</td>
-          </tr>
-          <tr style="border-bottom:1px solid #334155;">
-            <td style="padding:12px 0;color:#94a3b8;font-size:13px;">Signal</td>
-            <td style="padding:12px 0;font-weight:900;font-size:18px;color:{color};">{direction}</td>
-          </tr>
-          {conf_row}
-          <tr style="border-bottom:1px solid #334155;">
-            <td style="padding:12px 0;color:#94a3b8;font-size:13px;">Price</td>
-            <td style="padding:12px 0;color:#f1f5f9;font-weight:700;font-size:17px;">₹{price:.2f}</td>
-          </tr>
-          <tr>
-            <td style="padding:12px 0;color:#94a3b8;font-size:13px;vertical-align:top;">Details</td>
-            <td style="padding:12px 0;color:#cbd5e1;line-height:1.6;">{details}</td>
-          </tr>
-        </table>
-        <div style="margin-top:24px;padding:12px 16px;background:#0f172a;border-radius:8px;
-                    border-left:3px solid {color};">
-          <p style="margin:0;color:#64748b;font-size:12px;line-height:1.6;">
-            ⚠️ This alert is generated for educational and paper trading purposes only.
-            It does not constitute financial advice. Always do your own research.
-          </p>
-        </div>
-        <p style="margin-top:20px;color:#475569;font-size:12px;text-align:center;">
-          Paper Trade Arena — Stock Pattern Scanner
-        </p>
-      </div>
-    </body>
-    </html>
-    """
+        </body>
+        </html>
+        """
