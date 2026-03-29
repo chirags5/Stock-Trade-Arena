@@ -76,7 +76,7 @@ export default function BacktestPage({ API }) {
         <div>
           <h1 style={p.pageTitle}>📊 Backtest Engine</h1>
           <div style={p.pageSub}>
-            Test any Nifty 500 stock against 3 proven patterns using 2 years of real historical data
+            Test any Nifty 500 stock against 3 proven patterns using up to 5 years of real historical data
           </div>
         </div>
       </div>

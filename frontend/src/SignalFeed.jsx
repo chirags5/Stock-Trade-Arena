@@ -268,6 +268,27 @@ export default function SignalFeed({ API, prices, onTrade }) {
                             />
                             <span style={s.slTpHint}>Auto-exit when target profit is reached</span>
                           </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setSlTpOpen(prev => ({ ...prev, [stock.ticker]: false }));
+                            }}
+                            style={s.slTpCloseBtn}
+                            onMouseEnter={e => {
+                              e.currentTarget.style.background = 'var(--red-bg)';
+                              e.currentTarget.style.color = 'var(--red-text)';
+                              e.currentTarget.style.borderColor = 'var(--red-text)';
+                            }}
+                            onMouseLeave={e => {
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.color = 'var(--text-secondary)';
+                              e.currentTarget.style.borderColor = 'var(--glass-border)';
+                            }}
+                            title="Close"
+                          >
+                            ✕
+                          </button>
                         </div>
                       )}
                     </React.Fragment>
@@ -337,6 +358,21 @@ const s = {
     color: 'var(--text-primary)',
   },
   slTpHint: { fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' },
+  slTpCloseBtn: {
+    marginLeft: 'auto',
+    background: 'transparent',
+    border: '1px solid var(--glass-border)',
+    borderRadius: '50%',
+    color: 'var(--text-secondary)',
+    width: '26px',
+    height: '26px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
   loadingWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '80px 20px', gap: '16px' },
   loadingSpinner: { width: '32px', height: '32px', border: '3px solid var(--glass-border)', borderTop: '3px solid var(--tab-active)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
   loadingText: { fontSize: '14px', color: 'var(--text-secondary)' },

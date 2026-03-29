@@ -28,6 +28,24 @@ MARKET_OPEN  = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 
 
+def _to_float(value, default=None):
+    """Safely coerce scalar-like yfinance outputs to float."""
+    try:
+        if value is None:
+            return default
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            return float(value)
+        if hasattr(value, "iloc"):
+            return _to_float(value.iloc[-1], default)
+        if isinstance(value, (list, tuple, np.ndarray)):
+            if len(value) == 0:
+                return default
+            return _to_float(value[-1], default)
+        return float(value)
+    except Exception:
+        return default
+
+
 # ══════════════════════════════════════════════════════════════
 #  WATCHLIST CRUD
 # ══════════════════════════════════════════════════════════════
@@ -76,16 +94,11 @@ def remove_from_watchlist(ticker: str) -> dict:
 # ══════════════════════════════════════════════════════════════
 
 def fetch_ohlcv(ticker: str, period: str = "5d", interval: str = "15m"):
-    """Fetch OHLCV data for pattern detection via yfinance."""
     try:
-        df = yf.download(
-            f"{ticker}.NS", period=period, interval=interval,
-            auto_adjust=True, progress=False, actions=False,
-        )
-        if df.empty:
+        t = yf.Ticker(f"{ticker}.NS")
+        df = t.history(period=period, interval=interval, auto_adjust=True)
+        if df is None or df.empty:
             return None
-        if hasattr(df.columns, "levels"):
-            df.columns = df.columns.get_level_values(0)
         df = df.dropna()
         if len(df) < 20:
             return None
@@ -656,8 +669,22 @@ def scan_ticker(ticker: str, name: str = "") -> list:
         print(f"[Scanner] {ticker}: insufficient data")
         return []
 
+    # Drop the last candle — it is still forming during market hours
+    # Running patterns on a live incomplete candle gives unstable results
+    now_ist = datetime.now(IST).time()
+    if MARKET_OPEN <= now_ist <= MARKET_CLOSE:
+        df = df.iloc[:-1]
+
+    if len(df) < 25:
+        print(f"[Scanner] {ticker}: insufficient data after dropping live candle")
+        return []
+
     raw_patterns = []
-    price   = round(float(df["Close"].iloc[-1]), 2)
+    close_value = _to_float(df["Close"].iloc[-1])
+    if close_value is None:
+        print(f"[Scanner] {ticker}: could not parse latest close")
+        return []
+    price   = round(close_value, 2)
     now_str = datetime.now(IST).strftime("%d %b %Y %H:%M IST")
 
     # ── Collect every pattern that fires ──────────────────────
@@ -717,6 +744,66 @@ def scan_ticker(ticker: str, name: str = "") -> list:
     }]
 
 
+def _build_portfolio_data() -> dict | None:
+    try:
+        from database import get_cash_balance, get_open_trades
+        cash        = get_cash_balance()
+        open_trades = get_open_trades()
+        holdings    = []
+        total_value = cash
+
+        for trade in open_trades:
+            t      = trade["ticker"]
+            df_live = fetch_ohlcv(t, period="1d", interval="5m")
+            if df_live is not None and not df_live.empty:
+                ltp = _to_float(df_live["Close"].iloc[-1], trade["buy_price"])
+            else:
+                ltp = trade["buy_price"]
+            cost   = trade["buy_price"] * trade["qty"]
+            upnl   = (
+                (ltp - trade["buy_price"]) * trade["qty"]
+                if trade["direction"] == "BUY"
+                else (trade["buy_price"] - ltp) * trade["qty"]
+            )
+            total_value += cost + upnl
+            holdings.append({
+                "ticker":         t,
+                "direction":      trade["direction"],
+                "qty":            trade["qty"],
+                "buy_price":      trade["buy_price"],
+                "current_price":  round(ltp, 2),
+                "unrealised_pnl": round(upnl, 2),
+                "return_pct":     round((upnl / cost) * 100, 2) if cost else 0,
+            })
+
+        starting_capital = 1_000_000
+        pnl = total_value - starting_capital
+        return {
+            "cash_balance":    round(cash, 2),
+            "total_value":     round(total_value, 2),
+            "overall_pnl":     round(pnl, 2),
+            "overall_pnl_pct": round((pnl / starting_capital) * 100, 2),
+            "holdings":        holdings,
+        }
+    except Exception as e:
+        print(f"[Scanner] Portfolio build error (non-critical): {e}")
+        return None
+
+
+def _is_duplicate_alert(ticker: str, direction: str, pattern: str) -> bool:
+    try:
+        for a in _read_alerts_file()[:20]:
+            if (a.get("ticker") == ticker and
+                a.get("direction") == direction and
+                a.get("pattern") == pattern):
+                age = (datetime.now() - datetime.fromisoformat(a["timestamp"])).total_seconds()
+                if age < 1800:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 # ══════════════════════════════════════════════════════════════
 #  WATCHLIST SCAN + PERSIST
 # ══════════════════════════════════════════════════════════════
@@ -725,6 +812,8 @@ def scan_watchlist() -> list:
     """Scan all stocks in watchlist and fire notifications."""
     watchlist  = load_watchlist()
     all_alerts = []
+
+    portfolio_data = _build_portfolio_data()   # ← ADD: build once for all stocks
 
     for stock in watchlist:
         ticker = stock["ticker"]
@@ -737,6 +826,10 @@ def scan_watchlist() -> list:
             try:
                 from notifier import send_alert
                 for alert in alerts:
+                    if _is_duplicate_alert(alert["ticker"], alert["direction"], alert["pattern"]):
+                        print(f"[Scanner] {alert['ticker']}: duplicate suppressed")
+                        continue
+
                     send_alert(
                         ticker       = alert["ticker"],
                         name         = alert["name"],
@@ -745,6 +838,10 @@ def scan_watchlist() -> list:
                         details      = alert["details"],
                         price        = alert["price"],
                         category     = alert["category"],
+                        confidence   = alert.get("confidence"),
+                        buy_score    = alert.get("buy_score"),
+                        sell_score   = alert.get("sell_score"),
+                        portfolio    = portfolio_data,          # ← AI insight
                     )
             except Exception as e:
                 print(f"[Notifier] {e}")
@@ -756,7 +853,10 @@ def scan_watchlist() -> list:
 def _persist_alerts(new_alerts: list):
     with _alerts_lock:
         existing = _read_alerts_file()
-        combined = (new_alerts + existing)[:300]
+        # Remove old entries for tickers being updated — keep only latest per ticker
+        new_tickers = {a["ticker"] for a in new_alerts}
+        filtered_existing = [a for a in existing if a["ticker"] not in new_tickers]
+        combined = (new_alerts + filtered_existing)[:300]
         try:
             with open(ALERTS_FILE, "w") as f:
                 json.dump(combined, f, indent=2)
@@ -798,6 +898,7 @@ def scanner_loop(interval_minutes: int = 15):
     Only scans during NSE market hours (9:15 AM – 3:30 PM IST).
     """
     print("[Scanner] Background scanner thread started.")
+    time.sleep(30)
     while True:
         try:
             now_ist   = datetime.now(IST).time()

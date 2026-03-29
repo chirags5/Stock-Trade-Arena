@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 
 const API = 'http://localhost:8000';
@@ -246,11 +246,153 @@ function SupportingPatterns({ patterns }) {
   );
 }
 
+function PortfolioImpact({ alert, portfolio }) {
+  const [open,       setOpen]       = useState(false);
+  const [insight,    setInsight]    = useState(null);
+  const [insightFor, setInsightFor] = useState(null);
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState(null);
+  const abortRef                    = useRef(null);
+
+  useEffect(() => {
+    return () => { if (abortRef.current) abortRef.current.abort(); };
+  }, []);
+
+  const fetchInsight = async () => {
+    const alertKey = `${alert.ticker}_${alert.direction}_${alert.pattern}`;
+    if (insightFor === alertKey && insight) return;
+    if (abortRef.current) abortRef.current.abort();
+    abortRef.current = new AbortController();
+    setLoading(true); setError(null); setInsight(null);
+    try {
+      const res = await axios.post(
+        `${API}/scanner/portfolio-insight`,
+        {
+          alert: {
+            ticker:     alert.ticker,    name:       alert.name,
+            direction:  alert.direction, pattern:    alert.pattern,
+            category:   alert.category, confidence: alert.confidence,
+            price:      alert.price,    buy_score:  alert.buy_score,
+            sell_score: alert.sell_score,
+            details:    (alert.details || '').split(' | Signal resolved')[0],
+          },
+          portfolio,
+        },
+        { signal: abortRef.current.signal },
+      );
+      if (res.data.success) { setInsight(res.data.insight); setInsightFor(alertKey); }
+      else setError(res.data.error || 'Failed to generate insight');
+    } catch (e) {
+      if (axios.isCancel(e) || e.name === 'CanceledError') return;
+      setError('Could not connect to AI');
+    }
+    setLoading(false);
+  };
+
+  const handleOpen = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !loading) fetchInsight();
+  };
+
+  if (!portfolio) return null;
+
+  const price        = alert.price || 0;
+  const safePrice    = Math.max(price, 1);
+  const cash         = portfolio.cash_balance || 0;
+  const total        = Math.max(portfolio.total_value || 0, 1);
+  const suggestedQty = Math.max(1, Math.floor((total * 0.10) / safePrice));
+  const tradeValue   = Math.round(suggestedQty * safePrice);
+  const cashAfter    = Math.round(cash - tradeValue);
+  const portfolioPct = ((tradeValue / total) * 100).toFixed(1);
+  const canAfford    = cashAfter >= 0;
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button onClick={handleOpen} style={{
+        background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+        color: 'var(--text-secondary)', fontSize: 11, fontWeight: 600,
+        display: 'flex', alignItems: 'center', gap: 5,
+      }}>
+        <span style={{
+          width: 16, height: 16, borderRadius: 4, background: 'rgba(129,140,248,0.15)',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 9, fontWeight: 900, color: '#818cf8',
+        }}>{open ? '▲' : '▼'}</span>
+        <span style={{ color: '#818cf8' }}>🤖 AI Portfolio Impact</span>
+        {!canAfford && (
+          <span style={{
+            fontSize: 10, padding: '1px 6px', borderRadius: 99,
+            background: '#ef444418', color: '#ef4444',
+            border: '1px solid #ef444433', fontWeight: 700,
+          }}>⚠️ Low Cash</span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{
+          marginTop: 8, borderRadius: 9, overflow: 'hidden',
+          background: 'rgba(15,23,42,0.6)',
+          border: '1px solid rgba(129,140,248,0.15)',
+        }}>
+          {/* Quick numbers bar */}
+          <div style={{ display: 'flex', borderBottom: '1px solid rgba(148,163,184,0.08)' }}>
+            {[
+              { label: 'Suggested Qty', value: suggestedQty },
+              { label: 'Trade Value',   value: `₹${tradeValue.toLocaleString('en-IN')}` },
+              { label: 'Cash After',    value: `₹${cashAfter.toLocaleString('en-IN')}`, color: canAfford ? '#22c55e' : '#ef4444' },
+              { label: 'Portfolio %',   value: `${portfolioPct}%` },
+            ].map((item, i) => (
+              <div key={i} style={{
+                flex: 1, padding: '10px 12px', textAlign: 'center',
+                borderLeft: i > 0 ? '1px solid rgba(148,163,184,0.08)' : 'none',
+              }}>
+                <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 3, fontWeight: 600 }}>
+                  {item.label}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: item.color || 'var(--text-primary)' }}>
+                  {item.value}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* AI text */}
+          <div style={{ padding: '12px 14px' }}>
+            {loading && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#818cf8', fontSize: 13 }}>
+                <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span>
+                Analysing your portfolio with AI…
+              </div>
+            )}
+            {error && !loading && (
+              <div style={{ color: '#ef4444', fontSize: 12 }}>❌ {error}</div>
+            )}
+            {insight && !loading && (
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.75, whiteSpace: 'pre-wrap' }}>
+                {insight}
+              </div>
+            )}
+          </div>
+
+          <div style={{
+            padding: '8px 12px', borderTop: '1px solid rgba(148,163,184,0.06)',
+            fontSize: 10, color: '#475569', fontStyle: 'italic',
+          }}>
+            ⚠️ AI analysis for educational/paper trading only. Not financial advice.
+          </div>
+        </div>
+      )}
+      <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════
 //  STOCK DECISION CARD  — one per stock, shows final signal
 // ══════════════════════════════════════════════════════════════
 
-function StockDecisionCard({ alert }) {
+function StockDecisionCard({ alert, portfolio }) {
   const dir    = DIR[alert.direction] || DIR.NEUTRAL;
   const cColor = CAT_COLOR[alert.category] || '#94a3b8';
   const hasConflict = alert.buy_score > 0 && alert.sell_score > 0;
@@ -352,6 +494,7 @@ function StockDecisionCard({ alert }) {
 
         {/* Row 5: Collapsible supporting patterns */}
         <SupportingPatterns patterns={alert.all_patterns} />
+        <PortfolioImpact alert={alert} portfolio={portfolio} />
       </div>
     </div>
   );
@@ -525,7 +668,7 @@ function WatchlistPanel({ watchlist, maxCount, onRemove, onScan, scanning }) {
 //  DECISION FEED  — one card per stock
 // ══════════════════════════════════════════════════════════════
 
-function DecisionFeed({ alerts, onClear, loading }) {
+function DecisionFeed({ alerts, onClear, loading, portfolio }) {
   const [filter, setFilter] = useState('ALL');
 
   const stockDecisions = groupByStock(alerts);
@@ -609,7 +752,7 @@ function DecisionFeed({ alerts, onClear, loading }) {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {filtered.map(alert => (
-            <StockDecisionCard key={`${alert.ticker}_decision`} alert={alert} />
+            <StockDecisionCard key={alert.ticker} alert={alert} portfolio={portfolio} />
           ))}
         </div>
       )}
@@ -767,8 +910,10 @@ export default function WatchlistScanner() {
   const [maxCount,   setMaxCount]   = useState(10);
   const [scanning,   setScanning]   = useState(false);
   const [alertsLoad, setAlertsLoad] = useState(true);
+  const [portfolio,  setPortfolio]  = useState(null);
   const [activeTab,  setActiveTab]  = useState('scanner');
   const [toast,      setToast]      = useState(null);
+  const hasLoadedAlertsRef          = useRef(false);
 
   const showToast = (msg, ok = true) => {
     setToast({ msg, ok }); setTimeout(() => setToast(null), 3500);
@@ -782,21 +927,32 @@ export default function WatchlistScanner() {
     } catch {}
   }, []);
 
+  const fetchPortfolio = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/portfolio`);
+      setPortfolio(res.data);
+    } catch {}
+  }, []);
+
   const fetchAlerts = useCallback(async () => {
-    setAlertsLoad(true);
+    if (!hasLoadedAlertsRef.current) {
+      setAlertsLoad(true);
+    }
     try {
       const res = await axios.get(`${API}/scanner/alerts`);
       setAlerts(res.data.alerts);
     } catch {}
     setAlertsLoad(false);
+    hasLoadedAlertsRef.current = true;
   }, []);
 
   useEffect(() => {
     fetchWatchlist();
     fetchAlerts();
-    const t = setInterval(fetchAlerts, 60000);
+    fetchPortfolio();
+    const t = setInterval(() => { fetchAlerts(); fetchPortfolio(); }, 60000);
     return () => clearInterval(t);
-  }, [fetchWatchlist, fetchAlerts]);
+  }, [fetchWatchlist, fetchAlerts, fetchPortfolio]);
 
   const handleAdd = async (stock) => {
     try {
@@ -902,7 +1058,7 @@ export default function WatchlistScanner() {
                 onRemove={handleRemove} onScan={handleScan} scanning={scanning}
               />
             </div>
-            <DecisionFeed alerts={alerts} onClear={handleClearAlerts} loading={alertsLoad} />
+            <DecisionFeed alerts={alerts} onClear={handleClearAlerts} loading={alertsLoad} portfolio={portfolio} />
           </div>
         )}
         {activeTab === 'config' && (

@@ -243,6 +243,81 @@ def test_email() -> dict:
     return result
 
 
+def generate_portfolio_insight(alert: dict, portfolio: dict) -> str:
+    try:
+        from groq import Groq
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        api_key = os.getenv("GROQ_API_KEY", "").strip()
+        if not api_key:
+            return ""
+
+        client     = Groq(api_key=api_key)
+        cash       = portfolio.get("cash_balance", 0)
+        total      = portfolio.get("total_value", 0)
+        pnl        = portfolio.get("overall_pnl", 0)
+        pnl_pct    = portfolio.get("overall_pnl_pct", 0)
+        holdings   = portfolio.get("holdings", [])
+        price      = alert.get("price", 1)
+        safe_price = max(price, 1)
+
+        suggested_qty = max(1, int((total * 0.10) / safe_price))
+        trade_value   = round(suggested_qty * safe_price, 2)
+        cash_after    = round(cash - trade_value, 2)
+        portfolio_pct = round((trade_value / max(total, 1)) * 100, 1)
+
+        holdings_text = "No open positions." if not holdings else "\n".join([
+            f"  - {h['ticker']} ({h['direction']}) | Qty: {h['qty']} | "
+            f"Buy: ₹{h['buy_price']} | LTP: ₹{h['current_price']} | "
+            f"P&L: ₹{h['unrealised_pnl']} ({h['return_pct']}%)"
+            for h in holdings
+        ])
+
+        prompt = f"""
+Stock    : {alert.get('name')} ({alert.get('ticker')}) | {alert.get('direction')}
+Pattern  : {alert.get('pattern')} [{alert.get('category')}] | Confidence: {alert.get('confidence')}%
+Price    : ₹{price} | Buy Score: {alert.get('buy_score', 0)} | Sell Score: {alert.get('sell_score', 0)}
+Signal   : {alert.get('details')}
+
+Portfolio: Cash ₹{round(cash):,} | Total ₹{round(total):,} | P&L ₹{round(pnl):,} ({pnl_pct}%) | {len(holdings)} open positions
+{holdings_text}
+
+Proposed Trade: {suggested_qty} shares × ₹{price} = ₹{trade_value:,} | Cash after: ₹{cash_after:,} | {portfolio_pct}% of portfolio
+
+Write exactly 4 complete sentences:
+1. What this pattern means and its reliability
+2. Exact cash and exposure impact using the numbers above
+3. Risk given current P&L and open positions
+4. Final line must be: RECOMMENDATION: ACT / WAIT / AVOID — [one reason]
+Every sentence must end with a full stop. Stop after sentence 4.
+"""
+        response = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise paper trading advisor. Be specific, use actual numbers. "
+                        "Plain English only — no markdown, no bullets, no headers. "
+                        "Exactly 4 sentences. Every sentence ends with a full stop. Stop after sentence 4."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+            reasoning_effort="low",
+            max_completion_tokens=1024,
+        )
+        insight = response.choices[0].message.content.strip()
+        print(f"[Groq] ✓ Insight for {alert.get('ticker')}")
+        return insight
+
+    except Exception as e:
+        print(f"[Groq] Error: {e}")
+        return ""
+
+
 # ══════════════════════════════════════════════════════════════
 #  MAIN ALERT DISPATCHER
 # ══════════════════════════════════════════════════════════════
@@ -258,8 +333,21 @@ def send_alert(
     confidence:   int  = None,
     buy_score:    int  = None,
     sell_score:   int  = None,
+    portfolio:    dict = None,
 ):
     emoji    = "🟢" if direction == "BUY" else "🔴" if direction == "SELL" else "🟡"
+    # ── AI Portfolio Insight ───────────────────────────────────
+    ai_block = ""
+    if portfolio:
+        alert_data = {
+            "ticker": ticker, "name": name, "pattern": pattern_name,
+            "direction": direction, "details": details, "price": price,
+            "category": category, "confidence": confidence,
+            "buy_score": buy_score or 0, "sell_score": sell_score or 0,
+        }
+        insight = generate_portfolio_insight(alert_data, portfolio)
+        if insight:
+            ai_block = f"\n\n💡 <b>AI Portfolio Analysis:</b>\n{insight}"
     time_str = datetime.now().strftime("%d %b %Y %H:%M IST")
 
     # ── Confidence line (only shown if available) ──────────────
@@ -279,7 +367,8 @@ def send_alert(
         f"🔍 Pattern   : <b>{pattern_name}</b>\n"
         f"{conf_line}"
         f"💰 Price     : <b>₹{price:.2f}</b>\n"
-        f"ℹ️ {details}\n\n"
+        f"ℹ️ {details}"
+        f"{ai_block}\n\n"
         f"🕐 {time_str}\n"
         f"⚠️ <i>Not financial advice. Paper trade only.</i>"
     )
