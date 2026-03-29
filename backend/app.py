@@ -51,10 +51,9 @@ class NotifierConfigRequest(BaseModel):
     telegram_token:   str  = ""
     telegram_chat_id: str  = ""
     email_enabled:    bool = False
-    email_sender:     str  = ""
-    email_password:   str  = ""        # Only updated if non-empty and not masked
-    email_recipients: List[str] = []
 
+
+    email_recipients: List[str] = []
 
 # ── Nifty 500 — fetched live from NSE, refreshed every 24 hours ───────────────
 
@@ -673,12 +672,7 @@ def update_notifier_config(req: NotifierConfigRequest):
         "telegram_token":   req.telegram_token   or existing.get("telegram_token", ""),
         "telegram_chat_id": req.telegram_chat_id or existing.get("telegram_chat_id", ""),
         "email_enabled":    req.email_enabled,
-        "email_sender":     req.email_sender     or existing.get("email_sender", ""),
         "email_recipients": req.email_recipients or existing.get("email_recipients", []),
-        # Only update password if user provided a real one (not masked placeholder)
-        "email_password":   req.email_password
-                            if req.email_password and req.email_password != "••••••••"
-                            else existing.get("email_password", ""),
     }
     save_config(updated)
     return {"success": True, "message": "Config saved"}

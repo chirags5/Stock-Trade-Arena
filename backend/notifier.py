@@ -1,11 +1,8 @@
 """
 notifier.py — Sends pattern alerts via Telegram and Email (Gmail).
-Config is read from notifier_config.json (editable via /scanner/config API).
-
-Fixes:
-  - Email password no longer corrupted when frontend saves masked config
-  - Telegram errors now return specific failure reasons
-  - Config save merges selectively (never overwrites real password with mask)
+Telegram config: stored in notifier_config.json (editable via /scanner/config API).
+Email sender credentials: stored in .env (EMAIL_SENDER, EMAIL_PASSWORD).
+User only needs to provide recipient email(s) — no password exposed in UI.
 """
 
 import json
@@ -16,16 +13,16 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import requests
+from dotenv import load_dotenv
 
-CONFIG_FILE    = "notifier_config.json"
-PASSWORD_MASK  = "••••••••"
+load_dotenv()
+
+CONFIG_FILE = "notifier_config.json"
 
 _DEFAULT_CONFIG = {
     "telegram_token":   "",
     "telegram_chat_id": "",
     "email_enabled":    False,
-    "email_sender":     "",
-    "email_password":   "",
     "email_recipients": [],
 }
 
@@ -46,21 +43,15 @@ def load_config() -> dict:
 
 
 def save_config(incoming: dict) -> dict:
-    """
-    Merge incoming payload into the existing config.
-    CRITICAL: if the frontend sends back the password mask, keep the
-    real password that's already on disk — never overwrite with the mask.
-    """
     existing = load_config()
     merged   = {**existing}
 
     for key, value in incoming.items():
-        # Skip the masked placeholder so we never corrupt the real password
-        if key == "email_password" and value == PASSWORD_MASK:
+        # Ignore any legacy sender/password fields if frontend still sends them
+        if key in ("email_sender", "email_password"):
             continue
         merged[key] = value
 
-    # Ensure required keys always present
     for k, v in _DEFAULT_CONFIG.items():
         merged.setdefault(k, v)
 
@@ -71,12 +62,8 @@ def save_config(incoming: dict) -> dict:
 
 
 def get_safe_config() -> dict:
-    """Returns config with password masked — safe to send to frontend."""
-    cfg  = load_config()
-    safe = dict(cfg)
-    if safe.get("email_password"):
-        safe["email_password"] = PASSWORD_MASK
-    return safe
+    """Returns config — safe to send to frontend."""
+    return load_config()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -84,15 +71,10 @@ def get_safe_config() -> dict:
 # ══════════════════════════════════════════════════════════════
 
 def send_telegram(message: str) -> dict:
-    """
-    Send a Telegram message.
-    Returns {"success": bool, "message": str} with a specific reason on failure.
-    """
     cfg   = load_config()
     token = cfg.get("telegram_token", "").strip()
     chat  = cfg.get("telegram_chat_id", "").strip()
 
-    # ── Pre-flight checks ──────────────────────────────────────
     if not token:
         reason = "Bot token is empty — paste your token from @BotFather"
         print(f"[Telegram] {reason}")
@@ -103,13 +85,11 @@ def send_telegram(message: str) -> dict:
         print(f"[Telegram] {reason}")
         return {"success": False, "message": reason}
 
-    # Basic token format check: should be  <digits>:<alphanum>
     if ":" not in token or len(token) < 20:
         reason = "Bot token format looks wrong — should be like 123456789:ABC..."
         print(f"[Telegram] {reason}")
         return {"success": False, "message": reason}
 
-    # ── API call ───────────────────────────────────────────────
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         res = requests.post(url, json={
@@ -124,8 +104,7 @@ def send_telegram(message: str) -> dict:
             print("[Telegram] ✓ Message sent successfully")
             return {"success": True, "message": "Message sent!"}
 
-        # ── Map Telegram error codes to human-readable reasons ──
-        error_code = data.get("error_code")
+        error_code  = data.get("error_code")
         description = data.get("description", "Unknown error")
 
         if error_code == 401:
@@ -160,7 +139,6 @@ def send_telegram(message: str) -> dict:
 
 
 def test_telegram() -> dict:
-    """Send a test message to verify config."""
     msg = (
         "✅ <b>Stock Scanner Connected!</b>\n\n"
         "Your Telegram alerts are working correctly.\n"
@@ -172,29 +150,27 @@ def test_telegram() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════
-#  EMAIL
+#  EMAIL  — credentials from .env, recipients from config
 # ══════════════════════════════════════════════════════════════
 
 def send_email(subject: str, html_body: str) -> dict:
-    """
-    Send an email alert.
-    Returns {"success": bool, "message": str}.
-    """
     cfg = load_config()
 
     if not cfg.get("email_enabled"):
         return {"success": False, "message": "Email alerts are disabled"}
 
-    sender     = cfg.get("email_sender", "").strip()
-    password   = cfg.get("email_password", "").strip()
+    # ── Sender credentials come from .env only ─────────────────
+    sender   = os.getenv("EMAIL_SENDER", "").strip()
+    password = os.getenv("EMAIL_PASSWORD", "").strip()
+
     recipients = [r.strip() for r in cfg.get("email_recipients", []) if r.strip()]
 
     if not sender:
-        return {"success": False, "message": "Gmail sender address is empty"}
-    if not password or password == PASSWORD_MASK:
-        return {"success": False, "message": "Gmail App Password is empty or not saved"}
+        return {"success": False, "message": "EMAIL_SENDER not set in .env file"}
+    if not password:
+        return {"success": False, "message": "EMAIL_PASSWORD not set in .env file"}
     if not recipients:
-        return {"success": False, "message": "No recipients configured"}
+        return {"success": False, "message": "No recipient email addresses configured"}
 
     try:
         msg             = MIMEMultipart("alternative")
@@ -212,8 +188,8 @@ def send_email(subject: str, html_body: str) -> dict:
 
     except smtplib.SMTPAuthenticationError:
         reason = (
-            "Gmail authentication failed — make sure you're using an App Password "
-            "(not your Google login). Generate at: Google Account → Security → 2FA → App Passwords"
+            "Gmail authentication failed — check EMAIL_SENDER and EMAIL_PASSWORD in .env. "
+            "Make sure you're using a Gmail App Password, not your login password."
         )
         print(f"[Email] {reason}")
         return {"success": False, "message": reason}
@@ -228,7 +204,6 @@ def send_email(subject: str, html_body: str) -> dict:
 
 
 def test_email() -> dict:
-    """Send a test email to verify config."""
     html = _build_email_html(
         ticker       = "TEST",
         name         = "Test Stock",
@@ -239,15 +214,12 @@ def test_email() -> dict:
         category     = "Test",
         confidence   = 85,
     )
-    result = send_email("[Stock Scanner] ✅ Email Test", html)
-    return result
+    return send_email("[Stock Scanner] ✅ Email Test", html)
 
 
 def generate_portfolio_insight(alert: dict, portfolio: dict) -> str:
     try:
         from groq import Groq
-        from dotenv import load_dotenv
-        load_dotenv()
 
         api_key = os.getenv("GROQ_API_KEY", "").strip()
         if not api_key:
@@ -336,7 +308,6 @@ def send_alert(
     portfolio:    dict = None,
 ):
     emoji    = "🟢" if direction == "BUY" else "🔴" if direction == "SELL" else "🟡"
-    # ── AI Portfolio Insight ───────────────────────────────────
     ai_block = ""
     if portfolio:
         alert_data = {
@@ -350,7 +321,6 @@ def send_alert(
             ai_block = f"\n\n💡 <b>AI Portfolio Analysis:</b>\n{insight}"
     time_str = datetime.now().strftime("%d %b %Y %H:%M IST")
 
-    # ── Confidence line (only shown if available) ──────────────
     conf_line = ""
     if confidence is not None:
         conf_line = f"📊 Confidence : <b>{confidence}%</b>\n"
@@ -359,7 +329,6 @@ def send_alert(
 
     cat_label = f" [{category}]" if category else ""
 
-    # ── Telegram ──────────────────────────────────────────────
     tg_msg = (
         f"{emoji} <b>Final Signal{cat_label}</b>\n\n"
         f"📌 <b>{name}</b> <code>({ticker})</code>\n"
@@ -374,7 +343,6 @@ def send_alert(
     )
     send_telegram(tg_msg)
 
-    # ── Email ─────────────────────────────────────────────────
     html = _build_email_html(
         ticker, name, pattern_name, direction,
         details, price, category, confidence,
@@ -417,8 +385,6 @@ def _build_email_html(
     <body style="margin:0;padding:0;background:#0f172a;font-family:'Segoe UI',Arial,sans-serif;">
       <div style="max-width:520px;margin:32px auto;background:#1e293b;border-radius:16px;
                   padding:32px;border:1px solid #334155;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
-
-        <!-- Header -->
         <div style="margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #334155;">
           <div style="display:flex;align-items:center;gap:12px;">
             <span style="font-size:32px;">{emoji}</span>
@@ -432,8 +398,6 @@ def _build_email_html(
             </div>
           </div>
         </div>
-
-        <!-- Data table -->
         <table style="width:100%;border-collapse:collapse;">
           <tr style="border-bottom:1px solid #334155;">
             <td style="padding:12px 0;color:#94a3b8;font-size:13px;width:120px;">Stock</td>
@@ -460,8 +424,6 @@ def _build_email_html(
             <td style="padding:12px 0;color:#cbd5e1;line-height:1.6;">{details}</td>
           </tr>
         </table>
-
-        <!-- Disclaimer -->
         <div style="margin-top:24px;padding:12px 16px;background:#0f172a;border-radius:8px;
                     border-left:3px solid {color};">
           <p style="margin:0;color:#64748b;font-size:12px;line-height:1.6;">
@@ -469,7 +431,6 @@ def _build_email_html(
             It does not constitute financial advice. Always do your own research.
           </p>
         </div>
-
         <p style="margin-top:20px;color:#475569;font-size:12px;text-align:center;">
           Paper Trade Arena — Stock Pattern Scanner
         </p>
