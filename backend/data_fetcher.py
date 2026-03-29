@@ -269,6 +269,7 @@ def fetch_price_for_ticker(ticker):
 
 def fetch_live_prices_batch(tickers):
     """Batch fetch live prices for a list of tickers."""
+    tickers = list(tickers)
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Fetching {len(tickers)} prices...")
     symbols = [f"{t}.NS" for t in tickers]
     try:
@@ -276,6 +277,7 @@ def fetch_live_prices_batch(tickers):
             symbols, period="1d", interval="1m",
             auto_adjust=True, progress=False, group_by="ticker"
         )
+        prices = {}
         updated = 0
         for ticker in tickers:
             try:
@@ -284,11 +286,24 @@ def fetch_live_prices_batch(tickers):
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
                 if df is not None and not df.empty:
-                    price = float(df["Close"].dropna().iloc[-1])
-                    save_live_price(ticker, round(price, 2))
-                    updated += 1
+                    close_series = df["Close"].dropna()
+                    if not close_series.empty:
+                        prices[ticker] = round(float(close_series.iloc[-1]), 2)
+                    else:
+                        print(f"[WARN] Failed to fetch price for: {ticker}")
+                else:
+                    print(f"[WARN] Failed to fetch price for: {ticker}")
             except Exception:
-                pass
+                print(f"[WARN] Failed to fetch price for: {ticker}")
+
+        # Iterate over a snapshot copy to avoid runtime errors if dict changes.
+        for ticker, price in list(prices.items()):
+            try:
+                save_live_price(ticker, price)
+                updated += 1
+            except Exception:
+                print(f"[WARN] Failed to save live price for: {ticker}")
+
         print(f"  Updated {updated}/{len(tickers)} prices.")
     except Exception as e:
         print(f"  Batch failed: {e}")
