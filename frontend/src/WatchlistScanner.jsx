@@ -766,7 +766,7 @@ function DecisionFeed({ alerts, onClear, loading, portfolio }) {
 
 function ConfigPanel() {
   const [cfg, setCfg]               = useState(null);
-  const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+  const [saveStatus, setSaveStatus] = useState('idle');
   const [testing, setTesting]       = useState('');
   const [toast, setToast]           = useState(null);
   const autoSaveTimer               = useRef(null);
@@ -780,7 +780,6 @@ function ConfigPanel() {
       .catch(() => { setCfg({}); isFirstLoad.current = true; });
   }, []);
 
-  // ── Auto-save: debounced 1.5s after any cfg change ──────────
   useEffect(() => {
     if (!cfg) return;
     if (isFirstLoad.current) { isFirstLoad.current = false; return; }
@@ -831,11 +830,10 @@ function ConfigPanel() {
     idle:   null,
   }[saveStatus];
 
-  const PANEL_COLOR = '#818cf8'; // same purple for both panels
+  const PANEL_COLOR = '#818cf8';
 
   return (
     <Card>
-      {/* Header with auto-save indicator */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
         <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
           ⚙️ Notification Settings
@@ -860,7 +858,6 @@ function ConfigPanel() {
         }}>{toast.msg}</div>
       )}
 
-      {/* ── SIDE-BY-SIDE: Telegram LEFT | Email RIGHT ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'stretch' }}>
 
         {/* ── LEFT: TELEGRAM ── */}
@@ -924,9 +921,6 @@ function ConfigPanel() {
             pointerEvents: cfg.email_enabled ? 'auto' : 'none',
             display: 'flex', flexDirection: 'column', flex: 1,
           }}>
-            {field('Gmail Sender', 'email_sender', 'your@gmail.com')}
-            {field('App Password', 'email_password', '16-char Gmail App Password', 'password')}
-
             <div style={{ marginBottom: 14 }}>
               <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 5, fontWeight: 600 }}>
                 Recipients (comma-separated)
@@ -942,14 +936,6 @@ function ConfigPanel() {
                   color: 'var(--text-primary)', fontSize: 13, outline: 'none',
                 }}
               />
-            </div>
-
-            <div style={{
-              fontSize: 11, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.7,
-              padding: '8px 10px', borderRadius: 7, background: 'rgba(15,23,42,0.3)',
-            }}>
-              Use a Gmail App Password — not your Google login password.<br />
-              Generate at: Google Account → Security → 2FA → App Passwords
             </div>
 
             <div style={{ flex: 1 }} />
@@ -972,7 +958,6 @@ function ConfigPanel() {
         </div>
 
       </div>
-      {/* Save Settings button removed — auto-save handles it */}
     </Card>
   );
 }
