@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 
 _cache = {}
 
+BEARISH_PATTERNS = {"Bearish Breakdown", "Death Cross"}
+
 
 def get_ohlcv(ticker):
     ticker = ticker.upper()
@@ -126,7 +128,7 @@ def run_backtest(ticker, pattern_name, initial_capital=100000, lookahead_days=5)
         exit_   = closes[i + lookahead_days]
         qty     = max(1, int((capital * 0.10) / entry))
 
-        if pattern_name == "Bearish Breakdown":
+        if pattern_name in BEARISH_PATTERNS:
             pnl        = round((entry - exit_) * qty, 2)
             return_pct = round(((entry - exit_) / entry) * 100, 2)
         else:
@@ -221,10 +223,147 @@ def bearish_breakdown_fn(closes, volumes, lows):
     return today_close < lowest_20d and today_volume > avg_vol * 1.5
 
 
+# ── Helper functions ───────────────────────────────────────────────────────────
+
+def _sma(series, n):
+    if len(series) < n:
+        return None
+    return statistics.mean(series[-n:])
+
+
+def _rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return None
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [d if d > 0 else 0 for d in deltas[-period:]]
+    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+    avg_gain = statistics.mean(gains) if gains else 0
+    avg_loss = statistics.mean(losses) if losses else 0
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+
+def _ema(series, n):
+    if len(series) < n:
+        return None
+    k = 2 / (n + 1)
+    ema = statistics.mean(series[:n])
+    for price in series[n:]:
+        ema = price * k + ema * (1 - k)
+    return ema
+
+
+def _ema_series(series, n):
+    """Returns a list of EMA values for the full series."""
+    if len(series) < n:
+        return []
+    k = 2 / (n + 1)
+    ema = statistics.mean(series[:n])
+    result = [ema]
+    for price in series[n:]:
+        ema = price * k + ema * (1 - k)
+        result.append(ema)
+    return result
+
+
+def _macd(closes):
+    if len(closes) < 35:
+        return None, None
+    ema12_series = _ema_series(closes, 12)
+    ema26_series = _ema_series(closes, 26)
+    if not ema12_series or not ema26_series:
+        return None, None
+
+    # Align: ema26 starts 14 candles later than ema12
+    offset = len(ema12_series) - len(ema26_series)
+    macd_series = [
+        ema12_series[i + offset] - ema26_series[i]
+        for i in range(len(ema26_series))
+    ]
+    if len(macd_series) < 9:
+        return None, None
+
+    signal_series = _ema_series(macd_series, 9)
+    if not signal_series:
+        return None, None
+
+    return macd_series[-1], signal_series[-1]
+
+
+# ── Strategy functions ─────────────────────────────────────────────────────────
+
+def rsi_oversold_bounce_fn(closes, volumes, lows):
+    """RSI was below 30 yesterday, crossed above 30 today -> buy."""
+    if len(closes) < 20:
+        return False
+    rsi_today = _rsi(closes[-16:], 14)
+    rsi_prev = _rsi(closes[-17:-1], 14)
+    if rsi_today is None or rsi_prev is None:
+        return False
+    return rsi_prev < 30 and rsi_today >= 30
+
+
+def golden_cross_fn(closes, volumes, lows):
+    """50 SMA just crossed above 200 SMA."""
+    if len(closes) < 202:
+        return False
+    sma50_today = _sma(closes, 50)
+    sma200_today = _sma(closes, 200)
+    sma50_prev = _sma(closes[:-1], 50)
+    sma200_prev = _sma(closes[:-1], 200)
+    if None in (sma50_today, sma200_today, sma50_prev, sma200_prev):
+        return False
+    return sma50_prev <= sma200_prev and sma50_today > sma200_today
+
+
+def death_cross_fn(closes, volumes, lows):
+    """50 SMA just crossed below 200 SMA -> short/bearish."""
+    if len(closes) < 202:
+        return False
+    sma50_today = _sma(closes, 50)
+    sma200_today = _sma(closes, 200)
+    sma50_prev = _sma(closes[:-1], 50)
+    sma200_prev = _sma(closes[:-1], 200)
+    if None in (sma50_today, sma200_today, sma50_prev, sma200_prev):
+        return False
+    return sma50_prev >= sma200_prev and sma50_today < sma200_today
+
+
+def macd_crossover_fn(closes, volumes, lows):
+    """MACD line just crossed above signal line."""
+    if len(closes) < 36:
+        return False
+    macd_now, signal_now = _macd(closes)
+    macd_prev, signal_prev = _macd(closes[:-1])
+    if None in (macd_now, signal_now, macd_prev, signal_prev):
+        return False
+    return macd_prev <= signal_prev and macd_now > signal_now
+
+
+def bollinger_breakout_fn(closes, volumes, lows):
+    """Close breaks above upper Bollinger Band (20,2) with above-avg volume."""
+    if len(closes) < 21 or len(volumes) < 21:
+        return False
+    window = closes[-20:]
+    mean = statistics.mean(window)
+    std = statistics.stdev(window)
+    upper = mean + 2 * std
+    avg_vol = statistics.mean(volumes[-21:-1])
+    return closes[-1] > upper and volumes[-1] > avg_vol * 1.3
+
+
 PATTERN_FNS = {
-    "Bullish Flag Breakout": bullish_breakout_fn,
-    "Support Bounce":        support_bounce_fn,
-    "Bearish Breakdown":     bearish_breakdown_fn,
+    "Bullish Flag Breakout":  bullish_breakout_fn,
+    "Support Bounce":         support_bounce_fn,
+    "Bearish Breakdown":      bearish_breakdown_fn,
+    # ── New strategies ──
+    "RSI Oversold Bounce":    rsi_oversold_bounce_fn,
+    "Golden Cross":           golden_cross_fn,
+    "Death Cross":            death_cross_fn,
+    "MACD Crossover":         macd_crossover_fn,
+    "Bollinger Band Breakout": bollinger_breakout_fn,
 }
 
 

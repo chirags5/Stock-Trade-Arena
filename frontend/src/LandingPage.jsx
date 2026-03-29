@@ -35,6 +35,16 @@ const FEATURES = [
     tags: ['Auto Scan', 'Live Signals', 'Alerts'],
     pulse: true,
   },
+  {
+    route: '/angel',
+    icon: '🔗',
+    title: 'AngelOne Portfolio',
+    subtitle: 'Connect your real broker account',
+    description: 'Connect your AngelOne account and view live holdings, invested value, and running P&L alongside your paper trading setup.',
+    color: '#06b6d4',
+    tags: ['Broker Connect', 'Live Holdings', 'Real P&L'],
+    pulse: false,
+  },
 ];
 
 export default function LandingPage() {

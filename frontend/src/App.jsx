@@ -7,6 +7,7 @@ import Leaderboard from './Leaderboard';
 import BacktestPage from './BacktestPage';
 import LandingPage from './LandingPage';
 import WatchlistScanner from './WatchlistScanner';   // ← new
+import AngelPortfolio from './AngelPortfolio';
 import axios from 'axios';
 
 const API  = 'http://localhost:8000';
@@ -109,6 +110,7 @@ export default function App() {
   const isPaperTrade = location.pathname === '/paper-trade';
   const isBacktest   = location.pathname === '/backtest';
   const isScanner    = location.pathname === '/scanner';   // ← new
+  const isAngel      = location.pathname === '/angel';
 
   return (
     <>
@@ -144,6 +146,13 @@ export default function App() {
             }} />
           </button>
 
+          <button
+            onClick={() => navigate('/angel')}
+            style={{ ...nav.link, ...(isAngel ? nav.linkActive : {}) }}
+          >
+            🔗 AngelOne
+          </button>
+
           <button onClick={toggleTheme} style={nav.themeBtn}>
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
@@ -155,6 +164,7 @@ export default function App() {
         <Route path="/paper-trade" element={<PaperTradeArena theme={theme} toggleTheme={toggleTheme} />} />
         <Route path="/backtest"   element={<BacktestPage API={API} />} />
         <Route path="/scanner"    element={<WatchlistScanner />} />  {/* ← new */}
+        <Route path="/angel"      element={<AngelPortfolio API={API} />} />
       </Routes>
 
       <style>{`

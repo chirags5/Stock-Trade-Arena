@@ -2,7 +2,16 @@ import React, { useState, useRef } from 'react';
 import axios from 'axios';
 
 
-const PATTERNS = ["Bullish Flag Breakout", "Support Bounce", "Bearish Breakdown"];
+const PATTERNS = [
+  "Bullish Flag Breakout",
+  "Support Bounce",
+  "Bearish Breakdown",
+  "RSI Oversold Bounce",
+  "Golden Cross",
+  "Death Cross",
+  "MACD Crossover",
+  "Bollinger Band Breakout",
+];
 
 
 function EquityCurve({ data, width = 600, height = 100 }) {
@@ -79,7 +88,7 @@ export default function BacktestPage({ API }) {
         <div>
           <h1 style={p.pageTitle}>📊 Backtest Engine</h1>
           <div style={p.pageSub}>
-            Test any Nifty 500 stock against 3 proven patterns using 2 years of real historical data
+            Test any Nifty 500 stock against 8 proven patterns using 2 years of real historical data
           </div>
         </div>
       </div>
@@ -306,6 +315,11 @@ const PATTERN_DESC = {
   "Bullish Flag Breakout": "Price breaks above 20-day high with high volume",
   "Support Bounce":        "Price bounces from 20-day support level",
   "Bearish Breakdown":     "Price breaks below 20-day low with high volume",
+  "RSI Oversold Bounce":   "RSI(14) crosses above 30 from oversold zone",
+  "Golden Cross":          "50 SMA crosses above 200 SMA",
+  "Death Cross":           "50 SMA crosses below 200 SMA",
+  "MACD Crossover":        "MACD line crosses above signal line",
+  "Bollinger Band Breakout": "Close breaks above upper Bollinger band with strong volume",
 };
 
 

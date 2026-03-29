@@ -1,8 +1,10 @@
 import sqlite3
 import os
+import threading
 from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "arena.db")
+_db_lock = threading.Lock()
 
 
 def get_connection():
@@ -12,10 +14,13 @@ def get_connection():
 
 
 def init_db():
-    conn = get_connection()
-    c = conn.cursor()
+    with _db_lock:
+        conn = get_connection()
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        c = conn.cursor()
 
-    c.execute("""
+        c.execute("""
         CREATE TABLE IF NOT EXISTS historical_prices (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker  TEXT NOT NULL,
@@ -29,7 +34,7 @@ def init_db():
         )
     """)
 
-    c.execute("""
+        c.execute("""
         CREATE TABLE IF NOT EXISTS live_prices (
             ticker     TEXT PRIMARY KEY,
             price      REAL NOT NULL,
@@ -37,7 +42,7 @@ def init_db():
         )
     """)
 
-    c.execute("""
+        c.execute("""
         CREATE TABLE IF NOT EXISTS signals (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker      TEXT NOT NULL,
@@ -54,7 +59,7 @@ def init_db():
     """)
 
     # signal_id is now nullable — trades can exist without a signal
-    c.execute("""
+        c.execute("""
         CREATE TABLE IF NOT EXISTS trades (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             signal_id  INTEGER DEFAULT NULL,
@@ -71,7 +76,7 @@ def init_db():
         )
     """)
 
-    c.execute("""
+        c.execute("""
         CREATE TABLE IF NOT EXISTS portfolio (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id      TEXT NOT NULL DEFAULT 'demo_user',
@@ -80,7 +85,7 @@ def init_db():
         )
     """)
 
-    c.execute("""
+        c.execute("""
         CREATE TABLE IF NOT EXISTS leaderboard_users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             username      TEXT NOT NULL UNIQUE,
@@ -90,44 +95,44 @@ def init_db():
     """)
 
     # Seed demo user portfolio
-    exists = c.execute(
-        "SELECT id FROM portfolio WHERE user_id = 'demo_user'"
-    ).fetchone()
-    if not exists:
-        c.execute(
-            "INSERT INTO portfolio (user_id, cash_balance, updated_at) VALUES (?,?,?)",
-            ("demo_user", 1000000.0, datetime.now().isoformat())
-        )
-        print("Demo user created — ₹10,00,000 virtual cash ready")
+        exists = c.execute(
+            "SELECT id FROM portfolio WHERE user_id = 'demo_user'"
+        ).fetchone()
+        if not exists:
+            c.execute(
+                "INSERT INTO portfolio (user_id, cash_balance, updated_at) VALUES (?,?,?)",
+                ("demo_user", 1000000.0, datetime.now().isoformat())
+            )
+            print("Demo user created — ₹10,00,000 virtual cash ready")
 
     # Seed fake leaderboard users
-    fake_users = [
-        ("TradingPro_99",  1124500, 0),
-        ("Mumbai_Bulls",   1087200, 0),
-        ("NSE_Watcher",    1043800, 0),
-        ("Dalal_St_Fan",    982400, 0),
-        ("Beginner_01",     961000, 0),
-        ("demo_user",      1000000, 1),
-    ]
-    for username, val, is_real in fake_users:
-        c.execute("""
-            INSERT OR IGNORE INTO leaderboard_users (username, portfolio_val, is_real)
-            VALUES (?,?,?)
-        """, (username, val, is_real))
+        fake_users = [
+            ("TradingPro_99",  1124500, 0),
+            ("Mumbai_Bulls",   1087200, 0),
+            ("NSE_Watcher",    1043800, 0),
+            ("Dalal_St_Fan",    982400, 0),
+            ("Beginner_01",     961000, 0),
+            ("demo_user",      1000000, 1),
+        ]
+        for username, val, is_real in fake_users:
+            c.execute("""
+                INSERT OR IGNORE INTO leaderboard_users (username, portfolio_val, is_real)
+                VALUES (?,?,?)
+            """, (username, val, is_real))
 
     # Migration — add SL/TP columns if not exist.
-    for col_def in [
-        "stop_loss REAL",
-        "take_profit REAL",
-        "auto_exited INTEGER DEFAULT 0",
-    ]:
-        try:
-            c.execute(f"ALTER TABLE trades ADD COLUMN {col_def}")
-        except Exception:
-            pass
+        for col_def in [
+            "stop_loss REAL",
+            "take_profit REAL",
+            "auto_exited INTEGER DEFAULT 0",
+        ]:
+            try:
+                c.execute(f"ALTER TABLE trades ADD COLUMN {col_def}")
+            except Exception:
+                pass
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
     print("All tables created successfully.")
 
 
@@ -143,26 +148,28 @@ def get_cash_balance():
 
 
 def update_cash_balance(new_balance):
-    conn = get_connection()
-    conn.execute(
-        "UPDATE portfolio SET cash_balance = ?, updated_at = ? WHERE user_id = 'demo_user'",
-        (new_balance, datetime.now().isoformat())
-    )
-    conn.commit()
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        conn.execute(
+            "UPDATE portfolio SET cash_balance = ?, updated_at = ? WHERE user_id = 'demo_user'",
+            (new_balance, datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
 
 
 # ── Live price helpers ────────────────────────────────────────────────────────
 
 def save_live_price(ticker, price):
-    conn = get_connection()
-    conn.execute("""
-        INSERT INTO live_prices (ticker, price, updated_at) VALUES (?,?,?)
-        ON CONFLICT(ticker) DO UPDATE SET price=?, updated_at=?
-    """, (ticker, price, datetime.now().isoformat(),
-          price, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        conn.execute("""
+            INSERT INTO live_prices (ticker, price, updated_at) VALUES (?,?,?)
+            ON CONFLICT(ticker) DO UPDATE SET price=?, updated_at=?
+        """, (ticker, price, datetime.now().isoformat(),
+              price, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
 
 
 def get_live_price(ticker):
@@ -184,28 +191,29 @@ def get_all_live_prices():
 # ── Historical price helpers ──────────────────────────────────────────────────
 
 def save_historical_prices(ticker, df):
-    conn = get_connection()
-    saved = 0
-    for date, row in df.iterrows():
-        try:
-            conn.execute("""
-                INSERT OR IGNORE INTO historical_prices
-                    (ticker, date, open, high, low, close, volume)
-                VALUES (?,?,?,?,?,?,?)
-            """, (
-                ticker,
-                str(date.date()),
-                float(row["Open"]),
-                float(row["High"]),
-                float(row["Low"]),
-                float(row["Close"]),
-                float(row["Volume"])
-            ))
-            saved += 1
-        except Exception:
-            pass
-    conn.commit()
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        saved = 0
+        for date, row in df.iterrows():
+            try:
+                conn.execute("""
+                    INSERT OR IGNORE INTO historical_prices
+                        (ticker, date, open, high, low, close, volume)
+                    VALUES (?,?,?,?,?,?,?)
+                """, (
+                    ticker,
+                    str(date.date()),
+                    float(row["Open"]),
+                    float(row["High"]),
+                    float(row["Low"]),
+                    float(row["Close"]),
+                    float(row["Volume"])
+                ))
+                saved += 1
+            except Exception:
+                pass
+        conn.commit()
+        conn.close()
     return saved
 
 
@@ -226,17 +234,18 @@ def get_historical_prices(ticker, limit=500):
 
 def save_signal(ticker, stock_name, pattern, direction,
                 price, win_rate, conviction, explanation):
-    conn = get_connection()
-    cursor = conn.execute("""
-        INSERT INTO signals
-            (ticker, stock_name, pattern, direction, price,
-             win_rate, conviction, explanation, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?)
-    """, (ticker, stock_name, pattern, direction, price,
-          win_rate, conviction, explanation, datetime.now().isoformat()))
-    signal_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        cursor = conn.execute("""
+            INSERT INTO signals
+                (ticker, stock_name, pattern, direction, price,
+                 win_rate, conviction, explanation, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (ticker, stock_name, pattern, direction, price,
+              win_rate, conviction, explanation, datetime.now().isoformat()))
+        signal_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
     return signal_id
 
 
@@ -252,50 +261,53 @@ def get_all_signals():
 def update_signal_outcome(signal_id, outcome):
     if signal_id is None:
         return
-    conn = get_connection()
-    conn.execute(
-        "UPDATE signals SET outcome=? WHERE id=?", (outcome, signal_id)
-    )
-    conn.commit()
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        conn.execute(
+            "UPDATE signals SET outcome=? WHERE id=?", (outcome, signal_id)
+        )
+        conn.commit()
+        conn.close()
 
 
 # ── Trade helpers ─────────────────────────────────────────────────────────────
 
 def save_trade(ticker, direction, qty, buy_price, signal_id=None, stop_loss=None, take_profit=None):
-    conn = get_connection()
-    cursor = conn.execute("""
-        INSERT INTO trades
-            (signal_id, ticker, direction, qty, buy_price, status, buy_time, stop_loss, take_profit, auto_exited)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, (
-        signal_id,
-        ticker,
-        direction,
-        qty,
-        buy_price,
-        "OPEN",
-        datetime.now().isoformat(),
-        stop_loss,
-        take_profit,
-        0,
-    ))
-    trade_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        cursor = conn.execute("""
+            INSERT INTO trades
+                (signal_id, ticker, direction, qty, buy_price, status, buy_time, stop_loss, take_profit, auto_exited)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (
+            signal_id,
+            ticker,
+            direction,
+            qty,
+            buy_price,
+            "OPEN",
+            datetime.now().isoformat(),
+            stop_loss,
+            take_profit,
+            0,
+        ))
+        trade_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
     return trade_id
 
 
 def update_trade_thresholds(trade_id, stop_loss=None, take_profit=None):
-    conn = get_connection()
-    cursor = conn.execute("""
-        UPDATE trades
-        SET stop_loss = ?, take_profit = ?
-        WHERE id = ? AND status = 'OPEN'
-    """, (stop_loss, take_profit, trade_id))
-    conn.commit()
-    changed = cursor.rowcount
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        cursor = conn.execute("""
+            UPDATE trades
+            SET stop_loss = ?, take_profit = ?
+            WHERE id = ? AND status = 'OPEN'
+        """, (stop_loss, take_profit, trade_id))
+        conn.commit()
+        changed = cursor.rowcount
+        conn.close()
     return changed
 
 
@@ -312,37 +324,39 @@ def get_monitored_open_trades():
 
 
 def auto_close_trade(trade_id, sell_price, pnl):
-    conn = get_connection()
-    conn.execute("""
-        UPDATE trades
-        SET sell_price = ?, pnl = ?, status = 'CLOSED', sell_time = ?, auto_exited = 1
-        WHERE id = ?
-    """, (sell_price, pnl, datetime.now().isoformat(), trade_id))
-    conn.commit()
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        conn.execute("""
+            UPDATE trades
+            SET sell_price = ?, pnl = ?, status = 'CLOSED', sell_time = ?, auto_exited = 1
+            WHERE id = ?
+        """, (sell_price, pnl, datetime.now().isoformat(), trade_id))
+        conn.commit()
+        conn.close()
 
 
 def close_trade(trade_id, sell_price):
-    conn = get_connection()
-    trade = conn.execute(
-        "SELECT * FROM trades WHERE id=?", (trade_id,)
-    ).fetchone()
-    if not trade:
+    with _db_lock:
+        conn = get_connection()
+        trade = conn.execute(
+            "SELECT * FROM trades WHERE id=?", (trade_id,)
+        ).fetchone()
+        if not trade:
+            conn.close()
+            return None
+
+        if trade["direction"] == "BUY":
+            pnl = (sell_price - trade["buy_price"]) * trade["qty"]
+        else:
+            pnl = (trade["buy_price"] - sell_price) * trade["qty"]
+
+        conn.execute("""
+            UPDATE trades
+            SET sell_price=?, pnl=?, status='CLOSED', sell_time=?
+            WHERE id=?
+        """, (sell_price, pnl, datetime.now().isoformat(), trade_id))
+        conn.commit()
         conn.close()
-        return None
-
-    if trade["direction"] == "BUY":
-        pnl = (sell_price - trade["buy_price"]) * trade["qty"]
-    else:
-        pnl = (trade["buy_price"] - sell_price) * trade["qty"]
-
-    conn.execute("""
-        UPDATE trades
-        SET sell_price=?, pnl=?, status='CLOSED', sell_time=?
-        WHERE id=?
-    """, (sell_price, pnl, datetime.now().isoformat(), trade_id))
-    conn.commit()
-    conn.close()
     return round(pnl, 2)
 
 
@@ -385,12 +399,13 @@ def get_leaderboard():
 
 
 def update_leaderboard_realuser(portfolio_val):
-    conn = get_connection()
-    conn.execute("""
-        UPDATE leaderboard_users SET portfolio_val=? WHERE username='demo_user'
-    """, (portfolio_val,))
-    conn.commit()
-    conn.close()
+    with _db_lock:
+        conn = get_connection()
+        conn.execute("""
+            UPDATE leaderboard_users SET portfolio_val=? WHERE username='demo_user'
+        """, (portfolio_val,))
+        conn.commit()
+        conn.close()
 
 
 if __name__ == "__main__":

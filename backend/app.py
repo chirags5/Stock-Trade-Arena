@@ -1,11 +1,14 @@
 import threading
 import time
 import requests
+import secrets
 from contextlib import asynccontextmanager
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from angel_client import AngelOneClient
+from angel_models import ConnectRequest, ConnectResponse, Holding, HoldingsResponse
 
 from database import (
     init_db, get_cash_balance, update_cash_balance,
@@ -17,6 +20,10 @@ from database import (
 from data_fetcher import (
     fetch_live_prices, fetch_price_for_ticker, load_nse_stocks
 )
+
+
+# In-memory session store for AngelOne connections.
+active_sessions: dict[str, AngelOneClient] = {}
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -703,6 +710,104 @@ async def portfolio_insight(request: Request):
         return {"success": False, "error": "AI unavailable"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ── AngelOne integration routes ───────────────────────────────
+
+@app.post("/angel/connect", response_model=ConnectResponse)
+def angel_connect(req: ConnectRequest):
+    try:
+        client = AngelOneClient(
+            api_key=req.api_key,
+            client_id=req.client_id,
+            password=req.password,
+            totp_secret=req.totp_secret,
+        )
+        client.connect()
+        session_token = secrets.token_urlsafe(32)
+        active_sessions[session_token] = client
+        return ConnectResponse(
+            success=True,
+            message="Connected to AngelOne successfully",
+            session_token=session_token,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/angel/holdings", response_model=HoldingsResponse)
+def angel_holdings(x_session_token: str = Header(default="")):
+    if not x_session_token:
+        raise HTTPException(status_code=401, detail="Missing session token")
+
+    client = active_sessions.get(x_session_token)
+    if not client:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token")
+
+    try:
+        raw_holdings = client.get_holdings()
+        holdings: List[Holding] = []
+
+        total_invested = 0.0
+        total_current_value = 0.0
+
+        for item in raw_holdings:
+            qty = int(float(item.get("quantity") or 0))
+            avg_price = float(item.get("averageprice") or item.get("avgprice") or 0)
+            ltp = float(item.get("ltp") or item.get("close") or 0)
+
+            invested = qty * avg_price
+            current_value = qty * ltp
+            pnl = current_value - invested
+            pnl_pct = (pnl / invested * 100) if invested > 0 else 0.0
+
+            total_invested += invested
+            total_current_value += current_value
+
+            holdings.append(Holding(
+                tradingsymbol=str(item.get("tradingsymbol") or item.get("symboltoken") or ""),
+                exchange=str(item.get("exchange") or "NSE"),
+                isin=str(item.get("isin") or ""),
+                quantity=qty,
+                average_price=round(avg_price, 2),
+                ltp=round(ltp, 2),
+                pnl=round(pnl, 2),
+                pnl_percentage=round(pnl_pct, 2),
+            ))
+
+        total_pnl = total_current_value - total_invested
+        return HoldingsResponse(
+            success=True,
+            holdings=holdings,
+            total_invested=round(total_invested, 2),
+            total_current_value=round(total_current_value, 2),
+            total_pnl=round(total_pnl, 2),
+            message="Holdings fetched successfully",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/angel/disconnect")
+def angel_disconnect(x_session_token: str = Header(default="")):
+    if not x_session_token:
+        raise HTTPException(status_code=401, detail="Missing session token")
+
+    client = active_sessions.pop(x_session_token, None)
+    if not client:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token")
+
+    try:
+        client.disconnect()
+    except Exception:
+        pass
+
+    return {"success": True, "message": "Disconnected successfully"}
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "Paper Trade Arena API"}
 
 
 if __name__ == "__main__":
