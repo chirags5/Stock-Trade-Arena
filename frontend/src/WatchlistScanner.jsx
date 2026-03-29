@@ -765,31 +765,47 @@ function DecisionFeed({ alerts, onClear, loading, portfolio }) {
 // ══════════════════════════════════════════════════════════════
 
 function ConfigPanel() {
-  const [cfg, setCfg]         = useState(null);
-  const [saving, setSaving]   = useState(false);
-  const [testing, setTesting] = useState('');
-  const [toast, setToast]     = useState(null);
+  const [cfg, setCfg]               = useState(null);
+  const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+  const [testing, setTesting]       = useState('');
+  const [toast, setToast]           = useState(null);
+  const autoSaveTimer               = useRef(null);
+  const isFirstLoad                 = useRef(true);
 
   const showToast = (msg, ok = true) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 3500); };
 
   useEffect(() => {
-    axios.get(`${API}/scanner/config`).then(r => setCfg(r.data)).catch(() => setCfg({}));
+    axios.get(`${API}/scanner/config`)
+      .then(r => { setCfg(r.data); isFirstLoad.current = true; })
+      .catch(() => { setCfg({}); isFirstLoad.current = true; });
   }, []);
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      const payload = {
-        ...cfg,
-        email_recipients: typeof cfg.email_recipients === 'string'
-          ? cfg.email_recipients.split(',').map(s => s.trim()).filter(Boolean)
-          : cfg.email_recipients,
-      };
-      await axios.post(`${API}/scanner/config`, payload);
-      showToast('✅ Config saved successfully!');
-    } catch { showToast('❌ Failed to save config', false); }
-    setSaving(false);
-  };
+  // ── Auto-save: debounced 1.5s after any cfg change ──────────
+  useEffect(() => {
+    if (!cfg) return;
+    if (isFirstLoad.current) { isFirstLoad.current = false; return; }
+
+    setSaveStatus('saving');
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(async () => {
+      try {
+        const payload = {
+          ...cfg,
+          email_recipients: typeof cfg.email_recipients === 'string'
+            ? cfg.email_recipients.split(',').map(s => s.trim()).filter(Boolean)
+            : cfg.email_recipients,
+        };
+        await axios.post(`${API}/scanner/config`, payload);
+        setSaveStatus('saved');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } catch {
+        setSaveStatus('error');
+        setTimeout(() => setSaveStatus('idle'), 3000);
+      }
+    }, 1500);
+
+    return () => clearTimeout(autoSaveTimer.current);
+  }, [cfg]);
 
   if (!cfg) return <Card><div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Loading config…</div></Card>;
 
@@ -808,9 +824,33 @@ function ConfigPanel() {
     </div>
   );
 
+  const statusBadge = {
+    saving: { text: '⏳ Saving…',    color: '#f59e0b' },
+    saved:  { text: '✅ Saved',       color: '#22c55e' },
+    error:  { text: '❌ Save failed', color: '#ef4444' },
+    idle:   null,
+  }[saveStatus];
+
+  const PANEL_COLOR = '#818cf8'; // same purple for both panels
+
   return (
     <Card>
-      <SectionTitle>⚙️ Notification Settings</SectionTitle>
+      {/* Header with auto-save indicator */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+          ⚙️ Notification Settings
+        </h3>
+        {statusBadge ? (
+          <span style={{
+            fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 999,
+            background: statusBadge.color + '18', border: `1px solid ${statusBadge.color}33`,
+            color: statusBadge.color, transition: 'all 0.3s',
+          }}>{statusBadge.text}</span>
+        ) : (
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Auto-saves as you type</span>
+        )}
+      </div>
+
       {toast && (
         <div style={{
           padding: '10px 14px', borderRadius: 8, marginBottom: 16, fontSize: 13, fontWeight: 600,
@@ -820,82 +860,119 @@ function ConfigPanel() {
         }}>{toast.msg}</div>
       )}
 
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#818cf8', marginBottom: 12 }}>📬 Telegram</div>
-        {field('Bot Token', 'telegram_token', 'From @BotFather')}
-        {field('Chat ID', 'telegram_chat_id', 'Your chat or group ID')}
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10, lineHeight: 1.6 }}>
-          1. Message @BotFather → /newbot → copy token<br />
-          2. Message @userinfobot → copy your chat ID
-        </div>
-        <button onClick={async () => {
-          setTesting('telegram');
-          try {
-            const res = await axios.post(`${API}/scanner/test-telegram`);
-            showToast(res.data.success ? '✅ Telegram test sent!' : '❌ ' + res.data.message, res.data.success);
-          } catch { showToast('❌ Test failed', false); }
-          setTesting('');
-        }} disabled={testing === 'telegram'} style={{
-          padding: '7px 16px', borderRadius: 7, border: '1px solid #818cf833',
-          background: '#818cf811', color: '#818cf8', fontWeight: 700, fontSize: 12, cursor: 'pointer',
-        }}>{testing === 'telegram' ? '⏳ Sending…' : '📨 Send Test Message'}</button>
-      </div>
+      {/* ── SIDE-BY-SIDE: Telegram LEFT | Email RIGHT ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'stretch' }}>
 
-      <div style={{ borderTop: '1px solid var(--glass-border)', marginBottom: 20 }} />
+        {/* ── LEFT: TELEGRAM ── */}
+        <div style={{
+          padding: '18px', borderRadius: 12,
+          background: `${PANEL_COLOR}08`, border: `1px solid ${PANEL_COLOR}25`,
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: PANEL_COLOR, marginBottom: 16 }}>
+            📬 Telegram
+          </div>
 
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: '#22d3ee' }}>📧 Email</span>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-            <input type="checkbox" checked={cfg.email_enabled || false}
-              onChange={e => setCfg(p => ({ ...p, email_enabled: e.target.checked }))}
-              style={{ accentColor: '#22c55e' }} />
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Enable email alerts</span>
-          </label>
-        </div>
-        <div style={{ opacity: cfg.email_enabled ? 1 : 0.4, pointerEvents: cfg.email_enabled ? 'auto' : 'none' }}>
-          {field('Gmail Sender', 'email_sender', 'your@gmail.com')}
-          {field('App Password', 'email_password', '16-char Gmail App Password', 'password')}
-          <div style={{ marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 5, fontWeight: 600 }}>
-              Recipients (comma-separated)
-            </label>
-            <input
-              value={Array.isArray(cfg.email_recipients) ? cfg.email_recipients.join(', ') : (cfg.email_recipients || '')}
-              onChange={e => setCfg(p => ({ ...p, email_recipients: e.target.value }))}
-              placeholder="user1@gmail.com, user2@gmail.com"
-              style={{
-                width: '100%', boxSizing: 'border-box', padding: '9px 13px', borderRadius: 8,
-                background: 'var(--glass-header, rgba(15,23,42,0.6))',
-                border: '1px solid var(--glass-border, rgba(148,163,184,0.15))',
-                color: 'var(--text-primary)', fontSize: 13, outline: 'none',
-              }}
-            />
+          {field('Bot Token', 'telegram_token', 'From @BotFather')}
+          {field('Chat ID', 'telegram_chat_id', 'Your chat or group ID')}
+
+          <div style={{
+            fontSize: 11, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.7,
+            padding: '8px 10px', borderRadius: 7, background: 'rgba(15,23,42,0.3)',
+          }}>
+            1. Message @BotFather → /newbot → copy token<br />
+            2. Message @userinfobot → copy your chat ID<br />
+            3. Send /start to your bot before testing
           </div>
-          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10, lineHeight: 1.6 }}>
-            Use a Gmail App Password — not your Google login password.<br />
-            Generate at: Google Account → Security → 2FA → App Passwords
-          </div>
+
+          <div style={{ flex: 1 }} />
+
           <button onClick={async () => {
-            setTesting('email');
+            setTesting('telegram');
             try {
-              const res = await axios.post(`${API}/scanner/test-email`);
-              showToast(res.data.success ? '✅ Email test sent!' : '❌ ' + res.data.message, res.data.success);
+              const res = await axios.post(`${API}/scanner/test-telegram`);
+              showToast(res.data.success ? '✅ Telegram test sent!' : '❌ ' + res.data.message, res.data.success);
             } catch { showToast('❌ Test failed', false); }
             setTesting('');
-          }} disabled={testing === 'email'} style={{
-            padding: '7px 16px', borderRadius: 7, border: '1px solid #22d3ee33',
-            background: '#22d3ee11', color: '#22d3ee', fontWeight: 700, fontSize: 12, cursor: 'pointer',
-          }}>{testing === 'email' ? '⏳ Sending…' : '📨 Send Test Email'}</button>
+          }} disabled={testing === 'telegram'} style={{
+            width: '100%', padding: '10px', borderRadius: 8,
+            border: `1px solid ${PANEL_COLOR}33`,
+            background: testing === 'telegram' ? '#334155' : `${PANEL_COLOR}15`,
+            color: testing === 'telegram' ? '#64748b' : PANEL_COLOR,
+            fontWeight: 700, fontSize: 13, cursor: 'pointer',
+          }}>{testing === 'telegram' ? '⏳ Sending…' : '📨 Send Test Message'}</button>
         </div>
-      </div>
 
-      <button onClick={save} disabled={saving} style={{
-        width: '100%', padding: '11px', borderRadius: 9, border: 'none',
-        background: saving ? '#334155' : 'var(--tab-active, #818cf8)',
-        color: saving ? '#64748b' : '#fff', fontWeight: 700, fontSize: 14,
-        cursor: saving ? 'not-allowed' : 'pointer',
-      }}>{saving ? '⏳ Saving…' : '💾 Save Settings'}</button>
+        {/* ── RIGHT: EMAIL ── */}
+        <div style={{
+          padding: '18px', borderRadius: 12,
+          background: `${PANEL_COLOR}08`, border: `1px solid ${PANEL_COLOR}25`,
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: PANEL_COLOR }}>📧 Email</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={cfg.email_enabled || false}
+                onChange={e => setCfg(p => ({ ...p, email_enabled: e.target.checked }))}
+                style={{ accentColor: PANEL_COLOR }} />
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Enable email alerts</span>
+            </label>
+          </div>
+
+          <div style={{
+            opacity: cfg.email_enabled ? 1 : 0.4,
+            pointerEvents: cfg.email_enabled ? 'auto' : 'none',
+            display: 'flex', flexDirection: 'column', flex: 1,
+          }}>
+            {field('Gmail Sender', 'email_sender', 'your@gmail.com')}
+            {field('App Password', 'email_password', '16-char Gmail App Password', 'password')}
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 5, fontWeight: 600 }}>
+                Recipients (comma-separated)
+              </label>
+              <input
+                value={Array.isArray(cfg.email_recipients) ? cfg.email_recipients.join(', ') : (cfg.email_recipients || '')}
+                onChange={e => setCfg(p => ({ ...p, email_recipients: e.target.value }))}
+                placeholder="user1@gmail.com, user2@gmail.com"
+                style={{
+                  width: '100%', boxSizing: 'border-box', padding: '9px 13px', borderRadius: 8,
+                  background: 'var(--glass-header, rgba(15,23,42,0.6))',
+                  border: '1px solid var(--glass-border, rgba(148,163,184,0.15))',
+                  color: 'var(--text-primary)', fontSize: 13, outline: 'none',
+                }}
+              />
+            </div>
+
+            <div style={{
+              fontSize: 11, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.7,
+              padding: '8px 10px', borderRadius: 7, background: 'rgba(15,23,42,0.3)',
+            }}>
+              Use a Gmail App Password — not your Google login password.<br />
+              Generate at: Google Account → Security → 2FA → App Passwords
+            </div>
+
+            <div style={{ flex: 1 }} />
+
+            <button onClick={async () => {
+              setTesting('email');
+              try {
+                const res = await axios.post(`${API}/scanner/test-email`);
+                showToast(res.data.success ? '✅ Email test sent!' : '❌ ' + res.data.message, res.data.success);
+              } catch { showToast('❌ Test failed', false); }
+              setTesting('');
+            }} disabled={testing === 'email'} style={{
+              width: '100%', padding: '10px', borderRadius: 8,
+              border: `1px solid ${PANEL_COLOR}33`,
+              background: testing === 'email' ? '#334155' : `${PANEL_COLOR}15`,
+              color: testing === 'email' ? '#64748b' : PANEL_COLOR,
+              fontWeight: 700, fontSize: 13, cursor: 'pointer',
+            }}>{testing === 'email' ? '⏳ Sending…' : '📨 Send Test Email'}</button>
+          </div>
+        </div>
+
+      </div>
+      {/* Save Settings button removed — auto-save handles it */}
     </Card>
   );
 }
@@ -1062,7 +1139,7 @@ export default function WatchlistScanner() {
           </div>
         )}
         {activeTab === 'config' && (
-          <div style={{ maxWidth: 560 }}><ConfigPanel /></div>
+          <div style={{ maxWidth: 1000 }}><ConfigPanel /></div>
         )}
       </div>
 
