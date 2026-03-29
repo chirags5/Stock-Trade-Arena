@@ -1,26 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 export default function Leaderboard({ API }) {
   const [leaderboard, setLeaderboard] = useState([]);
-  const [loading, setLoading]         = useState(false);
 
-  useEffect(() => {
-    fetchLeaderboard();
-    const interval = setInterval(fetchLeaderboard, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  async function fetchLeaderboard() {
+  const fetchLeaderboard = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/leaderboard`);
       setLeaderboard(res.data.leaderboard || []);
     } catch (e) {
       console.error('Leaderboard fetch error:', e);
-    } finally {
-      setLoading(false);
     }
-  }
+  }, [API]);
+
+  useEffect(() => {
+    fetchLeaderboard();
+    const interval = setInterval(fetchLeaderboard, 30000);
+    return () => clearInterval(interval);
+  }, [fetchLeaderboard]);
 
   return (
     <div style={styles.wrapper}>

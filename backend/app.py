@@ -3,7 +3,7 @@ import time
 import requests
 from contextlib import asynccontextmanager
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -319,7 +319,6 @@ async def lifespan(app: FastAPI):
     fetch_nifty500_tickers()
     threading.Thread(target=price_refresh_loop,    daemon=True).start()
     threading.Thread(target=nifty500_refresh_loop, daemon=True).start()
-    threading.Thread(target=fetch_live_prices,     daemon=True).start()
     threading.Thread(target=monitor_sl_tp_loop,    daemon=True).start()
 
     # ── Scanner background thread ─────────────────────────────
@@ -616,12 +615,14 @@ def clear_scanner_alerts():
 @app.post("/scanner/run")
 def manual_scan():
     """Trigger an immediate scan of the watchlist (ignores market hours)."""
-    from scanner import load_watchlist, scan_ticker, _persist_alerts
+    from scanner import load_watchlist, scan_ticker, _persist_alerts, _build_portfolio_data
     from notifier import send_alert
 
     watchlist  = load_watchlist()
     if not watchlist:
         return {"alerts": [], "message": "Watchlist is empty — add stocks first"}
+
+    portfolio_data = _build_portfolio_data()
 
     all_alerts = []
     for stock in watchlist:
@@ -639,6 +640,10 @@ def manual_scan():
                     details      = alert["details"],
                     price        = alert["price"],
                     category     = alert["category"],
+                    confidence   = alert.get("confidence"),
+                    buy_score    = alert.get("buy_score"),
+                    sell_score   = alert.get("sell_score"),
+                    portfolio    = portfolio_data,
                 )
             except Exception as e:
                 print(f"[Notifier] {e}")
@@ -689,6 +694,21 @@ def test_telegram_notification():
 def test_email_notification():
     from notifier import test_email
     return test_email()
+
+
+@app.post("/scanner/portfolio-insight")
+async def portfolio_insight(request: Request):
+    try:
+        body      = await request.json()
+        alert     = body.get("alert", {})
+        portfolio = body.get("portfolio", {})
+        from notifier import generate_portfolio_insight
+        insight = generate_portfolio_insight(alert, portfolio)
+        if insight:
+            return {"success": True, "insight": insight}
+        return {"success": False, "error": "AI unavailable"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":

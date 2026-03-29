@@ -1,21 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 export default function AuditLog({ API }) {
   const [data, setData] = useState(null);
 
-  useEffect(() => {
-    fetchAudit();
-  }, []);
-
-  async function fetchAudit() {
+  const fetchAudit = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/audit`);
       setData(res.data);
     } catch (e) {
       console.error('Audit fetch error:', e);
     }
-  }
+  }, [API]);
+
+  useEffect(() => {
+    fetchAudit();
+  }, [fetchAudit]);
 
   if (!data) {
     return (
@@ -129,7 +129,7 @@ export default function AuditLog({ API }) {
 const styles = {
   wrapper: { width: '100%' },
   loadingWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '80px 20px', gap: '16px' },
-  loadingSpinner: { width: '32px', height: '32px', border: '3px solid var(--glass-border)', borderTop: '3px solid var(--tab-active)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
+  loadingSpinner: { width: '32px', height: '32px', border: '3px solid var(--glass-border)', borderTop: '3px solid var(--tab-active)', borderRadius: '50%' },
   loadingText: { fontSize: '14px', color: 'var(--text-secondary)' },
   
   glassPanelSmall: {
@@ -141,7 +141,6 @@ const styles = {
     padding: '20px',
     marginBottom: '20px',
     boxShadow: 'var(--glass-shadow)',
-    transition: 'all 0.3s ease',
   },
   glassPanel: {
     backgroundColor: 'var(--glass-bg)',
@@ -151,7 +150,6 @@ const styles = {
     borderRadius: '12px',
     boxShadow: 'var(--glass-shadow)',
     overflow: 'hidden',
-    transition: 'all 0.3s ease',
   },
   
   accHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' },
@@ -159,7 +157,7 @@ const styles = {
   accSub: { fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' },
   accScore: { fontSize: '32px', fontWeight: '700' },
   barBg: { height: '6px', backgroundColor: 'var(--table-header-bg)', borderRadius: '99px', overflow: 'hidden' },
-  barFill: { height: '100%', borderRadius: '99px', transition: 'width 1s cubic-bezier(0.4, 0, 0.2, 1)' },
+  barFill: { height: '100%', borderRadius: '99px' },
   
   panelHeader: { 
     display: 'flex', 
