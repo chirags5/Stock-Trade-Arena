@@ -16,6 +16,11 @@ From project root:
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
+If script execution is disabled, you might need to run Set-ExecutionPolicy RemoteSigned -Scope CurrentUser in an administrator PowerShell session first.
+Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser
+then run 
+.\venv\Scripts\Activate.ps1
+
 cd backend
 pip install -r requirements.txt
 ```
@@ -43,6 +48,40 @@ npm start
 ```
 
 
-You do not need to run `database.py` separately.
+Also below are the steps and a video on how you can create your own telegram bot
+📬 Telegram Alert Setup
+Step 1 — Create a Bot & Get Token
+Open Telegram → search @BotFather
 
-Running `python app.py` is enough because backend startup calls `init_db()` automatically and creates the SQLite database/tables (`backend/arena.db`) if they do not exist.
+Send /start then /newbot
+
+Enter a name e.g. My Scanner Bot
+
+Enter a username ending in bot e.g. myscanneralert_bot
+
+Copy the Bot Token → looks like 8603980520:AAEQTxxxxxxxxxxxxxxx
+
+Step 2 — Get Your Chat ID
+Open Telegram → search @userinfobot
+
+Send /start
+
+Copy the Id number it replies with e.g. 1249692664
+
+Step 3 — Activate Your Bot ⚠️
+Search your bot by username e.g. @myscanneralert_bot
+
+Open it → click Start or send /start
+
+This step is mandatory — without it the bot cannot send you messages
+
+Step 4 — Enter in Settings
+Open Scanner → Notification Settings
+
+Paste Bot Token and Chat ID in the Telegram panel
+
+Settings auto-save as you type
+
+Click Send Test Message to verify ✅
+
+Video link: https://drive.google.com/drive/folders/1bkk51IJ5g-SK7obTBM4M7hh5mzPOBSdL
