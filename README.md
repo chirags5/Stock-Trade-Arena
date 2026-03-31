@@ -25,12 +25,6 @@ cd backend
 pip install -r requirements.txt
 ```
 
-Create .env file and add:
-
-```env
-GROQ_API_KEY=your_groq_api_key
-```
-
 Run backend:
 
 ```powershell
